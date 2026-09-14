@@ -1,0 +1,258 @@
+# ThreeDream development plan
+
+日期：2026-09-14。  
+状态：主动迭代中。  
+关联调研：[Rust + wasm + WebGPU + three.js](./feasibility-rust-wasm-webgpu.md)。
+
+## 目标
+
+做一个在浏览器里能跑、能训练、能回放、能扩展到大规模仿真的 three.js 游戏与物理-AI
+内核。它不是 Unreal 的移植，而是以 Unreal 的架构为参考，重新实现一层浏览器原生的
+**确定性 CPU 内核 + GPU 规模层**。
+
+核心承诺：
+
+1. **确定性**：同一 seed、同一输入、同一版本，在 Node、浏览器、回放中结果一致。
+2. **可插拔**：物理、渲染、AI 都通过稳定接口替换，不把调用方绑死在一个后端上。
+3. **规模**：CPU 层保证正确与可复现，GPU 层承担粒子、软体、布料、群体等大规模仿真。
+4. **浏览器原生**：three.js 做渲染，WebGPU 做计算主线，WebGL2 做兼容回退。
+
+## 非目标
+
+以下事情刻意不做，避免把内核做成大而不可控的通用引擎：
+
+- 不移植 Unreal 源码，不提交 Epic 代码，不做“兼容 UE 资产”的承诺。
+- 不做完整编辑器、资源市场、网络同步或跨进程多人游戏。
+- 不把 GPU 层伪装成确定性后端；训练和回放继续走 CPU 确定性路径。
+- 不追求在所有浏览器上启用全部特性；能力探测与回退是产品的一部分。
+
+## 当前基线
+
+仓库已经有一个能跑、能测、能部署的内核：
+
+- 251 个单元测试，`npm run verify` 全绿。
+- GitHub Actions 四关卡：类型检查与构建、测试、覆盖率、浏览器渲染。
+- Pages 自动部署，线上 demo 可用。
+- 确定性 ECS、固定步长引擎、事件总线。
+- `PhysicsBackend` 抽象，已有 `builtin` 与 `rapier` 两个实现。
+- 带策略梯度的强化学习器，可在页面内训练。
+- three.js 渲染桥，渲染层不回写仿真状态。
+
+可行性调研已经证明：
+
+- Unreal 源码必须 clean-room 重写，不能直接提取。
+- three.js 与外部 WGSL 可以共享同一个 `GPUDevice` 并直接绑定 buffer，零拷贝可行。
+- Rust → wasm 的真实收益约 2.3–2.4x，可作为确定性 CPU 层的性能基础。
+- GPU 在大 N 场景有明确规模优势，但共享内存 iGPU 的绝对值不能当规格。
+- GitHub Pages 不提供 COOP/COEP，`SharedArrayBuffer` 不可用，因此 wasm 多线程在这条
+  部署路径上不可行。
+
+## 目标架构
+
+```text
+                    +----------------------+
+                    |  Game / AI / Env API |
+                    +----------+-----------+
+                               |
+                    +----------v-----------+
+                    |  Engine facade       |
+                    |  ECS + fixed clock   |
+                    +----------+-----------+
+                               |
+              +----------------+----------------+
+              |                                 |
+   +----------v-----------+          +----------v-----------+
+   | CPU deterministic    |          | GPU scale backend    |
+   | Rust wasm + SIMD128  |          | WebGPU / WGSL        |
+   | rigid body/training  |          | particles/soft body  |
+   +----------+-----------+          +----------+-----------+
+              |                                 |
+              +----------------+----------------+
+                               |
+                    +----------v-----------+
+                    |  three.js renderer   |
+                    |  shared GPUDevice    |
+                    |  WebGL2 fallback     |
+                    +----------------------+
+```
+
+分层约束：
+
+- `core/` 不依赖 three.js、WebGPU 或 WASM。
+- `physics/` 只暴露 `PhysicsBackend`，不暴露后端细节。
+- `render/` 是唯一允许直接依赖 three.js 的层。
+- GPU 后端如实声明 `deterministic: false`。
+- WebGL2 回退必须是运行时能力探测的结果，不是编译期分支。
+
+## 里程碑
+
+### M0：把计划变成可执行基线
+
+时间：1 周。
+
+任务：
+
+1. 建立本计划文档，并在 README 中链接。
+2. 建 Rust workspace 骨架，锁 wgpu v25，目标 `wasm32-unknown-unknown`。
+3. 增加 WebGPU 能力探测：adapter、feature set、limits、兼容模式。
+4. 把 `bench_shared_device.mjs` 的三条断言纳入浏览器测试。
+5. CI 增加 Rust 构建与 wasm 产物校验。
+
+验收：
+
+- `npm run verify` 全绿。
+- Rust workspace 能构建出 wasm。
+- 浏览器测试能证明共享 `GPUDevice`、共享 buffer、外部 WGSL 绑定三条事实。
+
+### M1：确定性 Rust wasm 物理内核
+
+时间：2–3 周。
+
+任务：
+
+1. 将 `builtin` 物理求解器的核心路径移植为 Rust。
+2. 使用 `wasm-bindgen` 暴露稳定 ABI，不泄漏 Rust 类型。
+3. 开启 SIMD128，保持固定步长与确定性约束。
+4. 在 TS 侧新增 `WasmPhysicsBackend`，继续实现 `PhysicsBackend`。
+5. 建立与 `builtin` 的位级一致性测试和性能回归基准。
+6. 保留现有 TS 后端作为规范实现与回退。
+
+验收：
+
+- 同一场景、同一 seed，`builtin` 与 wasm 后端状态逐位一致或误差在明确的舍入契约内。
+- 关键基准不低于 TS 版本 2x。
+- Node、浏览器、回放三处结果一致。
+- 所有现有环境与训练任务不改调用方即可切换后端。
+
+### M2：共享 GPUDevice 的 WebGPU 桥
+
+时间：1–2 周。
+
+任务：
+
+1. 把 `requestDevice()` 与 `WebGPURenderer` 统一为单例设备管理器。
+2. 对外暴露 buffer 句柄，而不是复制数据。
+3. 增加外部 WGSL compute pipeline 的通用封装。
+4. 建立能力降级矩阵：WebGPU、WebGL2、纯 CPU。
+5. 加入错误恢复与设备丢失处理。
+
+验收：
+
+- 渲染与计算共享同一个 `GPUDevice`。
+- three.js 管理的 buffer 可被外部 WGSL 直接读写。
+- 断言脚本纳入 CI。
+- 设备不可用时自动回退，不出现白屏或静默失败。
+
+### M3：GPU 粒子层
+
+时间：2 周。
+
+任务：
+
+1. 实现 GPU 粒子状态容器与 ping-pong buffer。
+2. 实现 n-body、重力、碰撞反弹、边界约束等基础 kernel。
+3. 增加空间哈希 broadphase 与原子计数。
+4. 用 three.js `InstancedMesh` 渲染，不回写仿真状态。
+5. 提供 CPU 与 WebGL2 回退路径。
+6. 增加视觉测试与性能基准。
+
+验收：
+
+- 在目标硬件上稳定运行 50,000–100,000 粒子。
+- WebGPU 不可用时自动降级到 WebGL2 或 CPU。
+- 回放与训练不依赖 GPU 层。
+- 渲染帧率与仿真步长解耦。
+
+### M4：GPU 规模物理层
+
+时间：3–4 周。
+
+任务：
+
+1. 实现 island 分组与 workgroup 映射。
+2. 实现约束图着色分批，避免数据竞争。
+3. 增加软体、布料、质点弹簧等大规模仿真。
+4. 保持 workgroup size 为 64，不依赖 subgroup。
+5. 加入确定性 CPU 参照实现，用于验证物理语义。
+6. 增加性能预算与内存预算。
+
+验收：
+
+- GPU 层能稳定处理 10,000 级别的软体或布料粒子。
+- island 并行与约束着色通过确定性对照测试。
+- CPU 层不因 GPU 层引入而变得不可测。
+- WebGL2 回退路径可用，性能目标明确降级。
+
+### M5：AI 与游戏层整合
+
+时间：2–3 周。
+
+任务：
+
+1. 优化 ECS 查询，为批量观测与动作传输准备 SoA 布局。
+2. 将 GPU 规模层接入环境与奖励信号。
+3. 保持训练循环完全 headless。
+4. 增加策略推理路径，优先 CPU/wasm，后续再评估 GPU 推理。
+5. 建立训练、回放、可视化的统一 API。
+
+验收：
+
+- 训练仍可在 Node 中无浏览器运行。
+- 同一策略在训练与浏览器演示中表现一致。
+- GPU 规模层可用于环境观测，但不破坏确定性回放。
+- AI 层不引入对 three.js 或 WebGPU 的直接依赖。
+
+### M6：生产化硬化
+
+时间：1–2 周。
+
+任务：
+
+1. 建立浏览器兼容矩阵：Chrome、Edge、Firefox、Safari、Firefox Android。
+2. 完善 WebGL2 回退与错误提示。
+3. 建立性能、内存、包体积预算。
+4. 增加设备丢失、上下文丢失、tab 切换、移动端降级测试。
+5. 完善文档、示例和版本化发布。
+
+验收：
+
+- CI 覆盖至少 Chrome 与一个回退浏览器。
+- 主路径与回退路径都有可运行的 demo。
+- 包体积与首屏时间有明确预算且被测试守住。
+- 发布流程可重复，不依赖手工步骤。
+
+## 执行顺序的理由
+
+1. **先锁确定性**：如果 CPU 层不确定，后面的训练、回放和测试都会失去地基。
+2. **再打通 GPU 桥**：共享 `GPUDevice` 是整个 WebGPU 层的架构前提。
+3. **先做粒子**：粒子没有 island 与约束图，是最短的 GPU 规模验证路径。
+4. **再做物理规模层**：等 GPU 桥和粒子层稳定后，才引入刚体/软体的复杂依赖。
+5. **最后整合 AI**：AI 需要稳定的环境契约，不能在物理接口还在变化时提前固化。
+
+## 风险与对策
+
+| 风险 | 影响 | 对策 |
+|---|---|---|
+| WebGPU 覆盖不足 | 部分用户无法使用 GPU 层 | WebGL2 与 CPU 回退必须在同一版本落地 |
+| three.js 版本升级破坏共享设备 | 计算与渲染无法互通 | 锁版本，升级时先跑共享设备断言 |
+| wgpu API 漂移 | Rust 侧编译与运行不稳定 | 锁 v25，升级作为独立任务评估 |
+| iGPU 性能波动 | 基准不可重复 | 使用中位数与多轮分布，不把单机值当规格 |
+| GPU 确定性缺失 | 训练与回放不可复现 | GPU 层声明 `deterministic: false`，训练走 CPU |
+| Pages 无 SAB | wasm 多线程不可用 | 先接受单核约束；若必须多核，再迁移托管 |
+| 内核范围膨胀 | 变成不可维护的大杂烩 | 每个里程碑都有明确非目标与验收门 |
+
+## 决策门
+
+- M1 未达到确定性验收前，不开始 M4。
+- M2 未通过共享 `GPUDevice` 断言前，不接入任何 GPU 物理。
+- M3 未达到粒子规模目标前，不承诺更复杂的软体/布体指标。
+- WebGL2 回退缺失时，不发布只支持 WebGPU 的版本。
+- 任何提交都不允许引入 Epic 源码或许可污染。
+
+## 立即行动
+
+1. 建 `rust/` workspace 与 wasm crate。
+2. 锁 wgpu v25，加入 CI。
+3. 新增 `WasmPhysicsBackend`。
+4. 把共享 `GPUDevice` 断言并入浏览器测试。
+5. 做一个 50k 粒子的 WebGPU demo，并保留 WebGL2 回退。
