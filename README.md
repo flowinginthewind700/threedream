@@ -230,6 +230,8 @@ and publishes `dist/`.
 
 ## Unreal Engine reference (opt-in)
 
+Current feasibility study: [Rust + wasm + WebGPU + three.js](docs/feasibility-rust-wasm-webgpu.md).
+
 `thirdparty/UnrealEngine` is a git submodule pointing at Epic's **private**
 repository, kept as an architecture reference to read rather than to build
 against. The repo stores only the gitlink; no Unreal source is committed.
@@ -249,6 +251,8 @@ Nothing in `src/`, `tests/` or the demo depends on it, so a plain
 `thirdparty/UnrealEngine` 是一个指向 Epic **私有**仓库的 git submodule，留作供阅读的
 架构参考，不参与构建。仓库里只存 gitlink，**不提交任何 Unreal 源码**。
 
+当前可行性调研：[Rust + wasm + WebGPU + three.js](docs/feasibility-rust-wasm-webgpu.md)。
+
 克隆本项目后该目录是空的。拉取它需要一个已接受 Epic EULA 并获得访问权限的 GitHub
 账号（命令同上）。这是一次数 GB 的浅克隆，脚本会对瞬时网络错误重试。`src/`、`tests/`
 和演示都不依赖它，所以直接 `npm install && npm test` 就能跑通。
@@ -262,6 +266,7 @@ src/ai/        mlp.ts policy.ts trainer.ts baseline.ts
 src/envs/      types.ts drive.ts reach.ts
 src/render/    scene.ts
 scripts/       train_headless.ts clone_unreal_reference.sh
+docs/          feasibility study and demo assets
 demo/          index.html main.ts styles.css
 tests/         15 files, 251 tests
 e2e/           Playwright spec for render/ (WebGL, browser-only)
