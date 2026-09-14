@@ -9,7 +9,15 @@ itself needs no browser, no GPU, and no WebAssembly.
 层，以及在页面里实时训练的强化学习器。渲染用 three.js，但仿真本身不依赖浏览器、GPU
 或 WebAssembly。
 
+[![CI](https://github.com/flowinginthewind700/threedream/actions/workflows/ci.yml/badge.svg)](https://github.com/flowinginthewind700/threedream/actions/workflows/ci.yml)
+
 ![the demo, mid-training](docs/demo-drive.jpg)
+
+Live demo: <https://flowinginthewind700.github.io/threedream/>, deployed from
+`main` automatically once every gate in CI is green.
+
+在线演示：<https://flowinginthewind700.github.io/threedream/>，`main` 上所有 CI 关卡
+通过后自动部署。
 
 ## Quickstart
 
@@ -17,7 +25,7 @@ itself needs no browser, no GPU, and no WebAssembly.
 npm install
 npm run dev       # browser demo on http://localhost:5173
 npm run train     # headless training in Node, prints a progress trace
-npm test          # 124 unit tests
+npm test          # 251 unit tests, ~18s
 npm run verify    # typecheck + test + build
 ```
 
@@ -43,7 +51,7 @@ Two rules drive the design:
 2. **Everything that matters is deterministic.** A seeded RNG, a fixed timestep,
    and no hidden global state mean `engine.step(n)` in Node and `engine.frame(dt)`
    in a browser produce the same simulation. That is what makes a physics-AI
-   kernel testable: all 124 tests run without a GPU.
+   kernel testable: all 251 tests run without a GPU.
 
 两条规则决定了整体设计：
 
@@ -51,7 +59,7 @@ Two rules drive the design:
    于是同一个场景既能无头训练，也能在浏览器里渲染游玩，结果完全一致。
 2. **关键路径都是确定性的。** 带种子的 RNG、固定步长、没有隐藏的全局状态，所以 Node
    里的 `engine.step(n)` 与浏览器里的 `engine.frame(dt)` 跑的是同一个仿真。这让一个
-   物理-AI 内核变得可测：124 个测试全都不需要 GPU。
+   物理-AI 内核变得可测：251 个测试全都不需要 GPU。
 
 ## Layers
 
@@ -174,6 +182,52 @@ changes. `src/envs/drive.ts` is the shortest useful example.
 在这样的世界上实现 `LearningEnvironment`，trainer 无需任何改动就能学它。
 `src/envs/drive.ts` 是最短且有用的示例。
 
+## Testing and CI
+
+The project is developed test-first: a spec exists for every module under `src/`,
+and `tests/tdd.test.ts` fails the build the moment a new module lands without one.
+
+| Command | What it runs | Cost |
+|---|---|---|
+| `npm test` | 251 unit tests, headless, no GPU/WASM | ~18s |
+| `npm run test:coverage` | same suite under v8, floor enforced by `vitest.config.ts` | ~4s |
+| `npm run test:e2e` | Playwright spec for `render/` against a real (software GL) browser | ~30s |
+
+Coverage is a separate command, not a flag on `npm test`: instrumenting the
+training inner loop costs ~10x wall time, and folding that into the fast loop
+would destroy the red/green cadence the tests exist to provide. So the coverage
+run skips the two convergence tests (`COVERAGE=1`, `tests/trainer.test.ts`) that
+cost 180s of the 185s and contribute ~0.3% of branch coverage — `npm test` still
+runs them, and `tests/tdd.test.ts` pins that asymmetry. The floor sits a few
+points under what the suite actually measures (93/82 against 97/87), which is
+the part that matters — a threshold set far below current reality is decoration,
+while one set at it makes every refactor a fight.
+
+`.github/workflows/ci.yml` is one file with four jobs: `verify` (typecheck +
+tests + build), `coverage`, and `e2e` run in parallel as gates, and `deploy`
+depends on all three. A separate `pages.yml` would deploy `main` even when a gate
+is red, because Actions cannot express `needs:` across workflow files — so the
+dependency lives in one graph, and `tests/ci_workflow.test.ts` pins it (along with
+the SHA-pinning of every action and the fact that gate jobs hold no publish
+permission). On a green push to `main`, `deploy` builds with the Pages base path
+and publishes `dist/`.
+
+本项目采用测试先行：`src/` 下每个模块都有对应 spec，一旦出现没有测试的新模块，
+`tests/tdd.test.ts` 会让构建失败。
+
+覆盖率是独立命令而非 `npm test` 的参数：给训练内层循环插桩会让墙钟时间涨约 10 倍，
+把它塞进快速循环会毁掉测试本该提供的红/绿节奏。因此覆盖率运行会跳过那两个收敛测试
+（`COVERAGE=1`，`tests/trainer.test.ts`）—— 它们占了 185s 里的 180s，却只贡献约 0.3%
+的分支覆盖率；`npm test` 照跑不误，这条不对称由 `tests/tdd.test.ts` 钉死。
+下限压在实测值之下几个点（实测 97 / 87，下限 93 / 82）—— 这才是关键：远低于现状的
+阈值只是装饰，而贴着现状设阈值则会让每次重构都变成搏斗。
+
+`.github/workflows/ci.yml` 是单文件四任务：`verify`（类型检查 + 测试 + 构建）、
+`coverage`、`e2e` 三个关卡并行，`deploy` 依赖这三者。单独的 `pages.yml` 会在关卡变红时
+仍然部署 `main`，因为 Actions 无法跨工作流文件表达 `needs:`，所以依赖关系收敛在一个图里，
+并由 `tests/ci_workflow.test.ts` 钉死（连同每个 action 的 SHA 锁定、以及关卡任务不持有发布
+权限这一事实）。`main` 上一次绿色 push 后，`deploy` 用 Pages base 路径构建并发布 `dist/`。
+
 ## Unreal Engine reference (opt-in)
 
 `thirdparty/UnrealEngine` is a git submodule pointing at Epic's **private**
@@ -209,7 +263,9 @@ src/envs/      types.ts drive.ts reach.ts
 src/render/    scene.ts
 scripts/       train_headless.ts clone_unreal_reference.sh
 demo/          index.html main.ts styles.css
-tests/         9 files, 124 tests
+tests/         15 files, 251 tests
+e2e/           Playwright spec for render/ (WebGL, browser-only)
+.github/       ci.yml: three gates (verify / coverage / e2e) then Pages deploy
 thirdparty/    UnrealEngine (submodule, opt-in)
 ```
 

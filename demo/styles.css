@@ -189,9 +189,14 @@ html, body {
   color: var(--text-faint);
   font-family: var(--mono);
   font-size: 12px;
-  transition: opacity 200ms ease;
+  /* `visibility` is included so the veil actually leaves the render tree once it
+     has faded: opacity alone keeps it there, which means a screen reader still
+     announces "Building scene" forever and `toBeHidden()` in the browser spec
+     never becomes true. visibility transitions discretely at the end of the
+     duration, so the fade-out still plays. */
+  transition: opacity 200ms ease, visibility 200ms;
 }
-.loading.is-hidden { opacity: 0; pointer-events: none; }
+.loading.is-hidden { opacity: 0; visibility: hidden; pointer-events: none; }
 
 /* --- sidebar --- */
 .sidebar {

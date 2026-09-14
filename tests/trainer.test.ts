@@ -114,7 +114,27 @@ describe('Trainer contract', () => {
   });
 });
 
-describe('Trainer learning', () => {
+/**
+ * The two tests below are the expensive ones, and they are expensive for a
+ * reason: convergence is the property under test, and it takes thousands of
+ * episodes to demonstrate. Un-instrumented they cost ~12s each; under v8
+ * coverage instrumentation the inner loop is the exact thing being counted, so
+ * they cost ~10x that (measured 115s for the physics task alone, against a 120s
+ * limit -- a CI flake on any runner slower than this one).
+ *
+ * They also contribute almost nothing to coverage: skipping both moves total
+ * branch coverage from 87.02% to 86.70%, because the *machinery* they exercise
+ * is already covered by the contract tests above, which run in milliseconds.
+ * What they add is a learning assertion, and `npm test` (the gate that runs
+ * un-instrumented, in `verify`) still makes it.
+ *
+ * So: run always, skip under coverage. The flag is set by `npm run
+ * test:coverage` and nothing else, which keeps `npm test` honest -- a skipped
+ * convergence test there would be a silent hole in the gate.
+ */
+const underCoverage = process.env.COVERAGE === '1';
+
+describe.skipIf(underCoverage)('Trainer learning', () => {
   it('converges to a known analytic optimum', () => {
     const env = new AnalyticEnv();
     const policy = new GaussianPolicy({

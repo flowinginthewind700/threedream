@@ -1,8 +1,8 @@
 {
-  "//": "Node-hosted code: training scripts and tests. Imports src/, so it keeps the DOM lib (src/render uses it) and only widens `types` to add Node globals.",
+  "//": "Node-hosted code: training scripts, unit tests, and the Playwright config + browser specs. Imports src/, so it keeps the DOM lib (src/render uses it) and only widens `types` to add Node globals. Nothing here is in tsconfig.json, so a spec that stops type-checking would otherwise fail silently -- only at run time.",
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "types": ["node", "vitest/globals"]
   },
-  "include": ["src", "scripts", "tests", "vitest.config.ts"]
+  "include": ["src", "scripts", "tests", "e2e", "vitest.config.ts", "playwright.config.ts"]
 }

@@ -108,6 +108,28 @@ const modeButtons = Array.from(
   document.querySelectorAll<HTMLButtonElement>('#mode-select .seg'),
 );
 
+/**
+ * Read the initially selected tab out of the markup.
+ *
+ * The HTML already says which tab is active (`aria-selected="true"` plus the
+ * `is-active` class). Re-declaring that fact in a `let` initialiser gives two
+ * sources of truth for one state, and they drift silently: the Playback control
+ * was showing "Learned" while the loop below was still sampling random actions,
+ * because the markup selected `policy` and the variable initialised to `random`.
+ * Nothing renders wrong and nothing throws -- the demo simply lies about what it
+ * is doing, which is the failure mode a viewer cannot detect.
+ */
+function initialSelected<T extends string>(
+  buttons: HTMLButtonElement[],
+  dataKey: string,
+): T {
+  const active = buttons.find((b) => b.getAttribute('aria-selected') === 'true');
+  if (!active?.dataset[dataKey]) {
+    throw new Error(`no tab marked aria-selected for data-${dataKey}`);
+  }
+  return active.dataset[dataKey] as T;
+}
+
 // ---------------------------------------------------------------------------
 // shared scene furniture
 // ---------------------------------------------------------------------------
@@ -290,8 +312,8 @@ type Mode = 'policy' | 'random';
 const SPEED_STEPS = [1, 2, 4, 8];
 let speedIndex = 0;
 
-let taskName: TaskName = 'drive';
-let mode: Mode = 'random';
+let taskName: TaskName = initialSelected<TaskName>(taskButtons, 'task');
+let mode: Mode = initialSelected<Mode>(modeButtons, 'mode');
 let training = false;
 let paused = false;
 
@@ -556,6 +578,21 @@ function setActive(buttons: HTMLButtonElement[], active: HTMLButtonElement): voi
   }
 }
 
+/**
+ * Paint the tab that matches the state we already hold, rather than the tab at
+ * some fixed index. Booting with `buttons[0]` looks harmless and is not: the
+ * moment the markup's selected tab stops being the first child, boot silently
+ * overrides what the markup declared and the two sources diverge again.
+ */
+function syncActive<T extends string>(
+  buttons: HTMLButtonElement[],
+  dataKey: string,
+  value: T,
+): void {
+  const match = buttons.find((b) => b.dataset[dataKey] === value);
+  if (match) setActive(buttons, match);
+}
+
 for (const b of taskButtons) {
   b.addEventListener('click', () => {
     const name = b.dataset['task'] as TaskName;
@@ -653,8 +690,8 @@ function loop(now: number): void {
 resetEpisode();
 drawSpark();
 paintStats();
-setActive(taskButtons, taskButtons[0]!);
-setActive(modeButtons, modeButtons[0]!);
+syncActive(taskButtons, 'task', taskName);
+syncActive(modeButtons, 'mode', mode);
 requestAnimationFrame(() => {
   loading.classList.add('is-hidden');
 });

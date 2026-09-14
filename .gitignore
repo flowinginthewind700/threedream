@@ -9,3 +9,9 @@ coverage/
 .env.local
 artifacts/
 *.tmp
+
+# Playwright: reports are regenerated per run, traces are large binaries.
+playwright-report/
+test-results/
+blob-report/
+playwright/.cache/

@@ -57,12 +57,20 @@
 
           <section class="panel">
             <h2 class="panel-title"><span data-icon="activity"></span> Playback</h2>
+            <!--
+              Which tab carries aria-selected="true" IS the initial playback mode:
+              demo/main.ts reads it via initialSelected() rather than re-declaring
+              a default in JS. Two declarations of one state drift silently, and
+              they did -- the control showed "Learned" while the loop sampled
+              random actions. Random first also matches the intended flow: watch
+              it flail, train, then flip to Learned to see the difference.
+            -->
             <div class="segmented segmented-full" id="mode-select" role="tablist" aria-label="Policy mode">
-              <button class="seg is-active" data-mode="policy" role="tab" aria-selected="true">
-                <span data-icon="brain"></span> Learned
-              </button>
-              <button class="seg" data-mode="random" role="tab" aria-selected="false">
+              <button class="seg is-active" data-mode="random" role="tab" aria-selected="true">
                 <span data-icon="shuffle"></span> Random
+              </button>
+              <button class="seg" data-mode="policy" role="tab" aria-selected="false">
+                <span data-icon="brain"></span> Learned
               </button>
             </div>
             <div class="row">

@@ -65,8 +65,26 @@ export class RapierPhysics implements PhysicsBackend {
   private readonly bodies = new Map<number, RapierBody>();
   /** Rapier collider handle -> our body handle. Maintained on create/destroy. */
   private readonly colliderToHandle = new Map<number, number>();
+  /**
+   * Bodies that received a user force this step. Rapier's `addForce` is
+   * *persistent* -- the force keeps being applied on every later step until
+   * `resetForces()` is called -- while `PhysicsBackend.applyForce` means "this
+   * step only" (that is what `BuiltinPhysics` does). Without clearing it, a
+   * single `applyForce` call would accelerate a body forever, and a per-frame
+   * call would ramp quadratically instead of linearly.
+   */
+  private readonly forcedBodies = new Set<RAPIER_NS.RigidBody>();
   private nextHandle = 1;
   private pendingContacts: ContactEvent[] = [];
+  /**
+   * True when something has changed that Rapier's query pipeline (broadphase
+   * for raycasts) cannot see yet. Rapier rebuilds query structures inside
+   * `step()` only, so a freshly created or teleported body is invisible to
+   * `castRay` until the world has stepped once -- a scene that raycasts on the
+   * same frame it spawns the ground would silently get a miss. See
+   * `syncQueries()`.
+   */
+  private queriesDirty = true;
 
   private constructor(
     RAPIER: RAPIER_T,
@@ -135,6 +153,12 @@ export class RapierPhysics implements PhysicsBackend {
     colliderDesc.setRestitution(descriptor.restitution ?? 0.1);
     colliderDesc.setFriction(descriptor.friction ?? 0.7);
     colliderDesc.setCollisionGroups(this.groupsFor(descriptor));
+    // Colliders default to `ActiveEvents.NONE`, which means Rapier never fills
+    // the contact-force queue and `drainContacts()` stays empty forever -- the
+    // adapter would report no collisions at all, and any reward or footstep
+    // logic built on contacts would be dead code. Enabling it on our collider is
+    // enough: Rapier fires the event if either side of the pair asks for it.
+    colliderDesc.setActiveEvents(R.ActiveEvents.CONTACT_FORCE_EVENTS);
     // Mass goes on the *collider*, not the body. `RigidBodyDesc.setAdditionalMass`
     // is lazy in Rapier: the value is folded into the body's mass properties only
     // at the next `world.step()`, so an impulse applied on the first frame after
@@ -154,6 +178,7 @@ export class RapierPhysics implements PhysicsBackend {
       label: descriptor.label ?? `body:${handle}`,
     });
     this.colliderToHandle.set(collider.handle, handle);
+    this.queriesDirty = true;
     return handle;
   }
 
@@ -188,7 +213,10 @@ export class RapierPhysics implements PhysicsBackend {
     if (!body) return;
     this.world.removeRigidBody(body.rigid);
     this.colliderToHandle.delete(body.collider.handle);
+    this.forcedBodies.delete(body.rigid);
     this.bodies.delete(handle);
+    // Removals *are* visible to queries immediately (Rapier erases the collider
+    // from the query pipeline as it goes), so this does not set `queriesDirty`.
   }
 
   getBodyState(handle: number): BodyState | undefined {
@@ -213,10 +241,12 @@ export class RapierPhysics implements PhysicsBackend {
     if (state.position) {
       const [x, y, z] = state.position;
       body.rigid.setTranslation({ x, y, z }, true);
+      this.queriesDirty = true;
     }
     if (state.rotation) {
       const [x, y, z, w] = quatFromEulerXYZ(state.rotation);
       body.rigid.setRotation({ x, y, z, w }, true);
+      this.queriesDirty = true;
     }
     if (state.velocity) {
       const [x, y, z] = state.velocity;
@@ -238,11 +268,37 @@ export class RapierPhysics implements PhysicsBackend {
     const body = this.bodies.get(handle);
     if (!body) return;
     body.rigid.addForce({ x: force[0], y: force[1], z: force[2] }, true);
+    this.forcedBodies.add(body.rigid);
+  }
+
+  /**
+   * Make newly created or moved bodies visible to `raycast()`.
+   *
+   * The only way to get Rapier to rebuild its query structures is to step the
+   * world, so this performs a *zero-timestep* step and restores the timestep
+   * afterwards. Measured properties of a `dt = 0` step: it does not integrate
+   * positions or velocities, does not apply pending forces or impulses, does
+   * not resolve penetration, and emits no events -- it only refreshes collider
+   * poses and the broadphase. `propagateModifiedBodyPositionsToColliders()` is
+   * not enough: it moves colliders but leaves the query pipeline stale, so
+   * raycasts still miss.
+   */
+  private syncQueries(): void {
+    if (!this.queriesDirty) return;
+    const dt = this.world.timestep;
+    this.world.timestep = 0;
+    this.world.step();
+    this.world.timestep = dt;
+    this.queriesDirty = false;
   }
 
   step(dt: number): void {
     this.world.timestep = dt;
     this.world.step(this.eventQueue);
+    this.queriesDirty = false;
+    // One step's worth of force, per the `PhysicsBackend` contract.
+    for (const rigid of this.forcedBodies) rigid.resetForces(false);
+    this.forcedBodies.clear();
     this.pendingContacts = [];
     const labels = (handle: number) => this.bodies.get(handle)?.label ?? `body:${handle}`;
     this.eventQueue.drainContactForceEvents((event) => {
@@ -280,6 +336,7 @@ export class RapierPhysics implements PhysicsBackend {
   }
 
   raycast(origin: Vec3, direction: Vec3, maxDistance: number): RayHit | undefined {
+    this.syncQueries();
     const dir = normalizeVec3(direction);
     const ray = new this.RAPIER.Ray(
       { x: origin[0], y: origin[1], z: origin[2] },
@@ -306,6 +363,7 @@ export class RapierPhysics implements PhysicsBackend {
   dispose(): void {
     this.bodies.clear();
     this.colliderToHandle.clear();
+    this.forcedBodies.clear();
     this.pendingContacts = [];
     this.world.free();
   }
