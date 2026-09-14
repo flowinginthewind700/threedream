@@ -104,11 +104,82 @@ jobs:
           path: playwright-report
           retention-days: 7
 
+  # `wasm/pkg` is a build artifact that is checked in, so the demo and Pages can
+  # load it without a Rust toolchain on the runner. That only holds while the
+  # bytes match `rust/`, and no other job can see a difference: TypeScript checks
+  # `src/physics/wasm.ts` against the `WasmBindings` interface it declares, not
+  # against the binary. So this job compiles the workspace, gates the committed
+  # artifact, then rebuilds it and compares hashes.
+  rust:
+    name: Rust kernel + wasm artifact
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Setup Node
+        # Needed for `npm run check:wasm`, the artifact gate below.
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install
+        run: npm ci
+      # wgpu is the slow part of this job (~3 min cold). The key covers both
+      # Cargo.lock and the toolchain pin, so a bump to either rebuilds from
+      # scratch instead of answering from a stale `target/`.
+      - name: Cache cargo
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/target
+          key: cargo-${{ runner.os }}-${{ hashFiles('rust/Cargo.lock', 'rust/rust-toolchain.toml') }}
+          restore-keys: cargo-${{ runner.os }}-
+      - name: Rust toolchain (channel and wasm32 target pinned by rust/rust-toolchain.toml)
+        # `rustup show` in that directory is what installs the pinned toolchain;
+        # the versions are echoed so a red run says which one it used.
+        run: cd rust && rustup show && rustc --version && cargo --version
+      - name: Install wasm-pack 0.13.1 (checksum-verified)
+        # Checksummed rather than `curl | sh`: the installer script is a mutable
+        # ref on a third-party repo, and this is the tool that mints the binary
+        # the whole determinism claim rests on.
+        run: |
+          set -euo pipefail
+          curl -sSfL --retry 3 -o /tmp/wasm-pack.tar.gz \
+            https://github.com/rustwasm/wasm-pack/releases/download/v0.13.1/wasm-pack-v0.13.1-x86_64-unknown-linux-musl.tar.gz
+          echo "c539d91ccab2591a7e975bcf82c82e1911b03335c80aa83d67ad25ed2ad06539  /tmp/wasm-pack.tar.gz" | sha256sum -c -
+          tar -xzf /tmp/wasm-pack.tar.gz -C /tmp
+          mkdir -p "$HOME/.cargo/bin"
+          install -m 0755 /tmp/wasm-pack-v0.13.1-x86_64-unknown-linux-musl/wasm-pack "$HOME/.cargo/bin/wasm-pack"
+          wasm-pack --version
+      # Native `cargo test` is what makes the solver's own invariants checkable
+      # without a browser; the wasm artifact gate below covers the shipped bytes.
+      - name: Rust tests (native, no browser needed)
+        run: npm run test:rust
+      - name: wgpu builds for wasm32 at the pinned version (M0 claim)
+        run: npm run build:wasm:gpu
+      - name: Check the committed wasm artifact
+        run: npm run check:wasm
+      - name: Snapshot the committed artifact
+        run: cp -a wasm/pkg /tmp/wasm-pkg-committed
+      - name: Rebuild the artifact from rust/
+        run: npm run build:wasm
+      - name: Rebuilt bytes must be identical to the committed ones
+        run: npm run check:wasm -- --baseline /tmp/wasm-pkg-committed
+      - name: Upload the rebuilt artifact for diffing
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: wasm-pkg-rebuilt
+          path: wasm/pkg
+          retention-days: 7
+
   # Publishes the demo only when every gate passed, and only on main.
   deploy:
     name: Deploy demo to GitHub Pages
     runs-on: ubuntu-latest
-    needs: [verify, coverage, e2e]
+    needs: [verify, coverage, e2e, rust]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     permissions:
       contents: read

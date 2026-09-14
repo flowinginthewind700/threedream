@@ -48,7 +48,7 @@ interface Workflow {
 }
 
 /** Gate jobs: everything a push must pass before anything can be published. */
-const GATES = ['verify', 'coverage', 'e2e'] as const;
+const GATES = ['verify', 'coverage', 'e2e', 'rust'] as const;
 
 function loadWorkflow(file: string): Workflow {
   const text = readFileSync(resolve(ROOT, '.github/workflows', file), 'utf8');
@@ -91,7 +91,7 @@ describe('ci.yml — triggers and shape', () => {
     expect(pushBranches(ci)).toContain('main');
   });
 
-  it('has exactly the four jobs: three gates and one deploy', () => {
+  it('has exactly the five jobs: four gates and one deploy', () => {
     // One file, one graph. GitHub Actions cannot express `needs:` across
     // workflow files, so a separate pages.yml would deploy main even when the
     // gate is red -- the one failure mode CI exists to prevent.
@@ -152,7 +152,7 @@ describe('every job installs identically', () => {
   });
 });
 
-describe('the three gates each enforce one thing', () => {
+describe('the four gates each enforce one thing', () => {
   it('verify gates on typecheck, the full unit suite, and the production build', () => {
     const run = runs(jobs.verify!);
     expect(run).toMatch(/npm run typecheck/);
@@ -178,6 +178,54 @@ describe('the three gates each enforce one thing', () => {
     expect(run, 'browsers must be installed on the runner').toMatch(/playwright install/);
     expect(run).toMatch(/chromium/);
     expect(jobs.e2e!.needs, 'e2e must not wait on verify').toBeUndefined();
+  });
+
+  it('rust gates the Rust workspace and the committed wasm artifact', () => {
+    // `wasm/pkg` is checked in so the demo needs no toolchain, which makes a
+    // stale artifact the one failure no TypeScript job can see. Both halves have
+    // to be here: the workspace's own tests, and the artifact's freshness.
+    const run = runs(jobs.rust!);
+    expect(run, 'native cargo tests').toMatch(/npm run test:rust/);
+    expect(run, 'wgpu must still build for wasm32 (M0 claim)').toMatch(/npm run build:wasm:gpu/);
+    expect(run, 'the committed artifact must be gated').toMatch(/npm run check:wasm/);
+    expect(jobs.rust!.needs, 'rust must not wait on another gate').toBeUndefined();
+  });
+
+  it('rust proves the committed artifact is what the sources rebuild to', () => {
+    // Step order is the contract here, so it is asserted on the step list rather
+    // than on the concatenated script text: `npm run build:wasm` is a prefix of
+    // `npm run build:wasm:gpu`, and string search cannot tell them apart.
+    const steps = (jobs.rust!.steps ?? []).map((s) => s.run ?? '');
+    const stepMatching = (re: RegExp) => steps.findIndex((run) => re.test(run));
+    const snapshot = stepMatching(/^cp -a wasm\/pkg/m);
+    const rebuild = stepMatching(/^npm run build:wasm$/m);
+    const compare = stepMatching(/check:wasm -- --baseline/);
+
+    expect(snapshot, 'the committed pkg must be snapshotted').toBeGreaterThan(-1);
+    expect(rebuild, 'the artifact must be rebuilt').toBeGreaterThan(-1);
+    expect(compare, 'the rebuild must be compared against the snapshot').toBeGreaterThan(-1);
+    // A rebuild whose bytes differ from the commit means someone edited rust/
+    // and forgot `npm run build:wasm`; any other order proves nothing.
+    expect(snapshot, 'snapshot must precede the rebuild').toBeLessThan(rebuild);
+    expect(rebuild, 'rebuild must precede the comparison').toBeLessThan(compare);
+  });
+
+  it('rust installs wasm-pack from a checksummed tarball, not a piped installer', () => {
+    const run = runs(jobs.rust!);
+    expect(run, 'wasm-pack must be installed').toMatch(/wasm-pack/);
+    expect(run, 'the tarball must be checksum-verified').toMatch(/sha256sum -c/);
+    // `curl ... | sh` is a mutable ref on a third-party repo deciding what mints
+    // the deterministic binary; the version is pinned in the URL and the digest
+    // in the step, so both are reviewable in the diff that changes them.
+    expect(run, 'no piped installer').not.toMatch(/curl[^|\n]*\|\s*(sudo\s+)?(ba)?sh/);
+    expect(run, 'the toolchain comes from rust-toolchain.toml').toMatch(/rustup show/);
+  });
+
+  it('rust uploads the rebuilt artifact when it fails, so a diff is possible', () => {
+    const upload = (jobs.rust!.steps ?? []).find((s) => s.uses?.startsWith('actions/upload-artifact'));
+    expect(upload, 'upload-artifact step is required').toBeDefined();
+    expect(upload?.if, 'only useful on failure').toMatch(/failure\(\)/);
+    expect(upload?.with?.path).toBe('wasm/pkg');
   });
 
   it('gate jobs cannot publish: no pages/id-token permissions, no deploy actions', () => {
