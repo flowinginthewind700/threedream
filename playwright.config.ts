@@ -24,6 +24,40 @@ const BASE = process.env.E2E_BASE_URL ?? 'http://127.0.0.1:4173/threedream';
  */
 const SERVE = 'npm run build:pages && npx vite preview --base /threedream/ --port 4173 --host 127.0.0.1 --strictPort';
 
+/**
+ * Two projects, because the pages need two different GPUs.
+ *
+ * `demo/` and `physics-check` only need *a* GL context, and headless Chromium
+ * has none, so they run on SwiftShader: that the render layer works without
+ * hardware is the property worth testing. `shared-device` needs a real
+ * `GPUDevice`, which SwiftShader-as-GL cannot provide -- it needs ANGLE's
+ * Vulkan backend with the WebGPU service enabled. Same browser, different
+ * flags, and a flag set that works for one silently downgrades the other, so
+ * they are separate projects rather than one `launchOptions` compromise.
+ */
+const SWIFTSHADER_ARGS = ['--use-gl=swiftshader', '--enable-unsafe-swiftshader', '--no-sandbox'];
+
+/**
+ * `--enable-unsafe-swiftshader` is in here too, and it is not redundant: on a
+ * runner with no GPU at all it is what lets ANGLE's Vulkan backend fall back to
+ * SwiftShader's Vulkan ICD instead of failing `requestAdapter()`. Where real
+ * hardware exists it changes nothing, because the fallback is only consulted
+ * once the real device is ruled out.
+ *
+ * `E2E_ANGLE` is the escape hatch for a machine where `vulkan` is the wrong
+ * answer (macOS wants `metal`, some Windows setups want `d3d11`).
+ */
+const WEBGPU_ARGS = [
+  '--no-sandbox',
+  '--ignore-gpu-blocklist',
+  '--enable-unsafe-swiftshader',
+  '--enable-features=Vulkan,DefaultANGLEVulkan,WebGPUService',
+  `--use-angle=${process.env.E2E_ANGLE ?? 'vulkan'}`,
+];
+
+/** Specs that need the WebGPU project, and must not run under SwiftShader. */
+const WEBGPU_SPECS = /shared_device\.spec\.ts/;
+
 export default defineConfig({
   testDir: './e2e',
   // The demo trains for real in-page; give slow CI runners room.
@@ -35,13 +69,19 @@ export default defineConfig({
   use: {
     baseURL: BASE,
     trace: 'retain-on-failure',
-    // Headless Chromium has no GPU, so the demo runs on SwiftShader. That is the
-    // point of the exercise: render/ must work without real hardware.
-    launchOptions: {
-      args: ['--use-gl=swiftshader', '--enable-unsafe-swiftshader', '--no-sandbox'],
-    },
   },
-  projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
+  projects: [
+    {
+      name: 'chromium',
+      testIgnore: WEBGPU_SPECS,
+      use: { ...devices['Desktop Chrome'], launchOptions: { args: SWIFTSHADER_ARGS } },
+    },
+    {
+      name: 'chromium-webgpu',
+      testMatch: WEBGPU_SPECS,
+      use: { ...devices['Desktop Chrome'], launchOptions: { args: WEBGPU_ARGS } },
+    },
+  ],
   // Serve the built site (not the dev server) so e2e tests the shipped bundle.
   // Point E2E_BASE_URL at a live deploy to test that instead; nothing is built.
   webServer: process.env.E2E_BASE_URL

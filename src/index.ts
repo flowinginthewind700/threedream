@@ -5,22 +5,25 @@
  * point consumers should need:
  *
  *   core    clock / ECS / events / engine facade   (no three.js, no WASM)
- *   physics backend interface + built-in solver    (no three.js, no WASM)
+ *   physics backend interface + three solvers      (no three.js; WASM on demand)
+ *   gpu     capability probing + tier selection    (no three.js, no WASM)
  *   ai      MLP, Gaussian policy, REINFORCE trainer (no three.js, no WASM)
  *   envs    learning tasks                         (physics only)
  *   render  three.js bridge                        (the only layer importing three)
  *
- * Everything except `render` and `physics/rapier` runs in bare Node, which is
- * what makes headless training and CI possible. `physics/wasm` is the exception
- * that still belongs to that group: it runs in Node too, because
- * `loadWasmKernel` reads the `.wasm` bytes through `node:fs` when the glue
- * resolves to a `file:` URL.
+ * Everything except `render` runs in bare Node, which is what makes headless
+ * training and CI possible. The two WASM backends are re-exported below and
+ * still belong to that group, because neither touches its binary at import
+ * time: `createRapierPhysics` and `loadWasmKernel` each `await import()` their
+ * module from inside the factory, so a script that never asks for a WASM world
+ * never instantiates one. `loadWasmKernel` additionally reads the `.wasm` bytes
+ * through `node:fs` when the glue resolves to a `file:` URL, which Node's
+ * `fetch` cannot.
  *
  * For that reason `render` is deliberately *not* re-exported here: importing
  * this barrel must not pull three.js into a training script. Browser code
  * imports `ThreeRenderer` from `threedream/render` (`src/render/scene.ts`)
- * directly, and `createRapierPhysics` likewise stays a separate import so the
- * WASM only loads where it is asked for.
+ * directly.
  */
 
 export { Rng, createRng } from './core/rng.js';
@@ -87,6 +90,37 @@ export {
   type PhysicsEvents,
   type PhysicsSystemOptions,
 } from './physics/components.js';
+
+export {
+  LIMIT_FLOOR,
+  LIMIT_NAMES,
+  OPTIONAL_FEATURES,
+  OPTIONAL_FEATURE_NAMES,
+  clampWorkgroupSize,
+  describeCapabilities,
+  gpuFrom,
+  maxElements,
+  probeWebGpu,
+  probeWebgl2,
+  selectRenderTier,
+  snapshotLimits,
+  unmetLimitsOf,
+} from './gpu/capabilities.js';
+export type {
+  CanvasLike,
+  FeatureLevel,
+  GpuAdapterLike,
+  GpuLike,
+  GpuLimits,
+  LimitName,
+  OptionalFeature,
+  ProbeWebGpuOptions,
+  RenderTier,
+  RenderTierDecision,
+  UnavailableReason,
+  WebGpuCapabilities,
+  Webgl2Capabilities,
+} from './gpu/capabilities.js';
 
 export { Mlp } from './ai/mlp.js';
 export type { MlpSpec, MlpSnapshot } from './ai/mlp.js';

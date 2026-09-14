@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ThreeDream - shared GPUDevice check</title>
+    <meta
+      name="description"
+      content="ThreeDream shared-device check: one GPUDevice owned by the page, injected into three.js WebGPURenderer, with a raw WGSL compute pipeline bound directly to a three.js-managed buffer."
+    />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="app">
+      <header class="topbar">
+        <div class="brand">
+          <span class="logo" id="brand-logo" aria-hidden="true"></span>
+          <div class="brand-text">
+            <h1>ThreeDream</h1>
+            <p>one GPUDevice, three.js rendering and raw WGSL compute</p>
+          </div>
+        </div>
+        <div class="segmented" id="run-controls">
+          <button class="seg is-active" id="run-btn" type="button">
+            <span class="seg-icon" data-icon="play"></span> <span class="btn-label">Run</span>
+          </button>
+        </div>
+      </header>
+
+      <main class="stage">
+        <div class="viewport" id="viewport">
+          <div class="viewport-overlay" id="overlay">
+            <span class="badge" id="tier-badge">no adapter</span>
+            <span class="badge" id="frame-badge">0 frames</span>
+          </div>
+          <!-- The check starts on load; this is the pre-probe / no-JS state. -->
+          <div class="loading" id="loading">Probing adapters&hellip;</div>
+        </div>
+
+        <aside class="sidebar" aria-label="Shared device results">
+          <section class="panel">
+            <h2 class="panel-title"><span data-icon="shield-check"></span> Claims</h2>
+            <dl class="stats">
+              <div><dt>device injected</dt><dd id="cl-device">&mdash;</dd></div>
+              <div><dt>buffer reachable</dt><dd id="cl-buffer">&mdash;</dd></div>
+              <div><dt>raw WGSL bound</dt><dd id="cl-pipeline">&mdash;</dd></div>
+              <div><dt>interleaved</dt><dd id="cl-interleaved">&mdash;</dd></div>
+              <div><dt>sentinel points</dt><dd id="cl-sentinel">&mdash;</dd></div>
+              <div><dt>presented pixels</dt><dd id="cl-pixels">&mdash;</dd></div>
+            </dl>
+            <p class="foot" id="verdict">Not run yet.</p>
+          </section>
+
+          <section class="panel">
+            <h2 class="panel-title"><span data-icon="gauge"></span> Adapter</h2>
+            <dl class="stats">
+              <div><dt>render tier</dt><dd id="ad-tier">&mdash;</dd></div>
+              <div><dt>feature level</dt><dd id="ad-level">&mdash;</dd></div>
+              <div><dt>invocations/wg</dt><dd id="ad-invocations">&mdash;</dd></div>
+              <div><dt>storage binding</dt><dd id="ad-storage">&mdash;</dd></div>
+              <div><dt>max buffer</dt><dd id="ad-buffer">&mdash;</dd></div>
+              <div><dt>three revision</dt><dd id="ad-revision">&mdash;</dd></div>
+              <div><dt>ms / frame</dt><dd id="ad-ms">&mdash;</dd></div>
+            </dl>
+          </section>
+
+          <section class="panel">
+            <h2 class="panel-title"><span data-icon="terminal"></span> Log</h2>
+            <ul class="report" id="log"></ul>
+          </section>
+
+          <p class="foot">
+            The page owns the <code>GPUDevice</code> and hands it to
+            <code>WebGPURenderer</code>, so a raw WGSL pipeline and three.js share
+            one queue. This is the bridge the M2&ndash;M4 compute layers cross with
+            zero copies; <code>e2e/shared_device.spec.ts</code> asserts it.
+          </p>
+        </aside>
+      </main>
+    </div>
+    <script type="module" src="./shared-device.ts"></script>
+  </body>
+</html>

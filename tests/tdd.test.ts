@@ -115,11 +115,21 @@ describe('every source module is specified by a test', () => {
   );
 
   it('the barrel is covered transitively: every layer has a dedicated spec', () => {
-    // `src/index.ts` re-exports five layers. If a layer had no spec, the barrel
-    // assertion above would pass vacuously, so check each layer explicitly.
+    // `src/index.ts` re-exports five layers: core, physics, gpu, ai, envs. If a
+    // layer had no spec, the barrel assertion above would pass vacuously, so
+    // check each layer explicitly. The two WASM backends are listed next to
+    // `physics` for the same reason: a caller can select either one, and nothing
+    // else would notice their specs going missing.
     const stems = testFiles().map((f) => f.replace('.test.ts', ''));
-    for (const required of ['rng', 'clock', 'ecs', 'physics', 'mlp', 'policy', 'trainer', 'envs']) {
-      expect(stems, `missing spec for the ${required} layer`).toContain(required);
+    const required = [
+      'rng', 'clock', 'ecs',
+      'physics', 'wasm_backend', 'rapier_backend',
+      'gpu_capabilities',
+      'mlp', 'policy', 'trainer',
+      'envs',
+    ];
+    for (const layer of required) {
+      expect(stems, `missing spec for the ${layer} layer`).toContain(layer);
     }
   });
 

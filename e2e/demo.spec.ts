@@ -9,42 +9,7 @@
 
 import { expect, test, type Page } from '@playwright/test';
 
-/**
- * Decode a PNG screenshot into distinct RGB triples, inside the page.
- *
- * This is the only readback path that works on this renderer. `scene.ts` creates
- * its WebGL context with `preserveDrawingBuffer: false`, so by the time any JS
- * runs the drawing buffer has been cleared for compositing: `canvas.toDataURL()`,
- * `ctx.drawImage(canvas, ...)`, and `gl.readPixels()` all return exactly one
- * flat colour even while the page is visibly animating (measured: 1 distinct
- * colour from all three, 1512 from the decoded screenshot, same frame). Reading
- * the compositor's own capture is what actually contains the pixels.
- *
- * Decoding via an in-page `<img>` keeps this dependency-free: no pngjs, no
- * sharp, just the browser's own PNG decoder.
- */
-async function distinctColors(page: Page, png: Buffer): Promise<number> {
-  return page.evaluate(async (b64: string) => {
-    const img = new Image();
-    await new Promise<void>((resolve, reject) => {
-      img.onload = () => resolve();
-      img.onerror = () => reject(new Error('screenshot did not decode'));
-      img.src = `data:image/png;base64,${b64}`;
-    });
-    const off = document.createElement('canvas');
-    off.width = img.naturalWidth;
-    off.height = img.naturalHeight;
-    const ctx = off.getContext('2d');
-    if (!ctx) throw new Error('no 2d context');
-    ctx.drawImage(img, 0, 0);
-    const data = ctx.getImageData(0, 0, off.width, off.height).data;
-    const seen = new Set<string>();
-    for (let i = 0; i < data.length; i += 4) {
-      seen.add(`${data[i]},${data[i + 1]},${data[i + 2]}`);
-    }
-    return seen.size;
-  }, png.toString('base64'));
-}
+import { distinctColors } from './pixels.js';
 
 /** The demo serves from a subpath when built for Pages; resolve either way. */
 const BASE = process.env.E2E_BASE_URL ?? 'http://127.0.0.1:4173/threedream';

@@ -23,6 +23,7 @@ import { DriveEnv } from '../src/envs/drive.js';
 import { ReachEnv } from '../src/envs/reach.js';
 import { BuiltinPhysics, createBuiltinPhysics } from '../src/physics/builtin.js';
 import {
+  REFERENCE_GOLDEN_DIGEST,
   REFERENCE_OPTIONS,
   REFERENCE_STEPS,
   buildReferenceScene,
@@ -45,16 +46,16 @@ import { vec3, type PhysicsBackend, type Vec3 } from '../src/physics/types.js';
 const DT = 1 / 60;
 
 /**
- * The reference digest, recorded.
+ * The reference digest, recorded in `src/physics/reference.ts` so the browser
+ * spec asserts the very same string this file does.
  *
  * Both backends must produce exactly this. Pinning it (rather than only
  * comparing the two to each other) is what catches a change to `builtin.ts`:
  * without it, editing the reference solver and its port in the same commit would
  * keep this file green while silently invalidating every replay ever recorded.
- * Regenerate with `npx tsx artifacts/reference_probe.mts`-style output from
- * `runReference` only when the change to the solver is deliberate.
+ * Regenerate it only when the change to the solver is deliberate.
  */
-const GOLDEN_DIGEST = '65e56ebb483e7923:90649';
+const GOLDEN_DIGEST = REFERENCE_GOLDEN_DIGEST;
 
 /** One kernel for the whole file: instantiating wasm per test would dominate. */
 const kernel = await loadWasmKernel();

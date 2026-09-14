@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ThreeDream - determinism check</title>
+    <meta
+      name="description"
+      content="ThreeDream determinism check: the reference physics scene run through the builtin TypeScript solver, the Rust/wasm kernel, and a wasm replay in the browser, compared bit for bit against the recorded digest."
+    />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="app">
+      <header class="topbar">
+        <div class="brand">
+          <span class="logo" id="brand-logo" aria-hidden="true"></span>
+          <div class="brand-text">
+            <h1>ThreeDream</h1>
+            <p>builtin vs Rust/wasm, bit for bit, in this browser</p>
+          </div>
+        </div>
+        <div class="segmented" id="backend-select" role="tablist" aria-label="Live backend">
+          <button class="seg is-active" data-backend="builtin" role="tab" aria-selected="true">
+            <span class="seg-icon" data-icon="cpu"></span> builtin
+          </button>
+          <button class="seg" data-backend="wasm" role="tab" aria-selected="false">
+            <span class="seg-icon" data-icon="boxes"></span> wasm
+          </button>
+        </div>
+      </header>
+
+      <main class="stage">
+        <div class="viewport" id="viewport">
+          <div class="viewport-overlay" id="overlay">
+            <span class="badge" id="backend-badge">builtin</span>
+            <span class="badge" id="step-badge">&mdash;</span>
+          </div>
+          <div class="loading" id="loading">Loading kernel&hellip;</div>
+        </div>
+
+        <aside class="sidebar" aria-label="Determinism results">
+          <section class="panel">
+            <h2 class="panel-title"><span data-icon="fingerprint"></span> Digests</h2>
+            <dl class="stats">
+              <div><dt>golden</dt><dd id="dg-golden">&mdash;</dd></div>
+              <div><dt>builtin</dt><dd id="dg-builtin">&mdash;</dd></div>
+              <div><dt>wasm</dt><dd id="dg-wasm">&mdash;</dd></div>
+              <div><dt>replay</dt><dd id="dg-replay">&mdash;</dd></div>
+            </dl>
+            <p class="foot" id="verdict">Running the reference scene&hellip;</p>
+          </section>
+
+          <section class="panel">
+            <h2 class="panel-title"><span data-icon="activity"></span> Reference run</h2>
+            <dl class="stats">
+              <div><dt>steps</dt><dd id="st-steps">&mdash;</dd></div>
+              <div><dt>bodies</dt><dd id="st-bodies">&mdash;</dd></div>
+              <div><dt>samples</dt><dd id="st-samples">&mdash;</dd></div>
+              <div><dt>contacts</dt><dd id="st-contacts">&mdash;</dd></div>
+              <div><dt>raycasts</dt><dd id="st-rays">&mdash;</dd></div>
+              <div><dt>hashed values</dt><dd id="st-values">&mdash;</dd></div>
+              <div><dt>builtin</dt><dd id="st-builtin-ms">&mdash;</dd></div>
+              <div><dt>wasm</dt><dd id="st-wasm-ms">&mdash;</dd></div>
+              <div><dt>speedup</dt><dd id="st-speedup">&mdash;</dd></div>
+            </dl>
+          </section>
+
+          <section class="panel">
+            <h2 class="panel-title"><span data-icon="rotate-ccw"></span> Playback</h2>
+            <div class="row">
+              <button class="btn" id="pause-btn" title="Pause / resume the live run">
+                <span data-icon="pause"></span><span class="btn-label">Pause</span>
+              </button>
+              <button class="btn" id="restart-btn" title="Restart the live run">
+                <span data-icon="rotate-ccw"></span><span class="btn-label">Restart</span>
+              </button>
+            </div>
+          </section>
+
+          <p class="foot">
+            The live scene is driven by the backend selected above and steps the
+            same <code>REFERENCE_SCRIPT</code> that produced the digests, so both
+            panes are the same run. <code>e2e/wasm_physics.spec.ts</code> asserts
+            these values against the digest recorded in Node.
+          </p>
+        </aside>
+      </main>
+    </div>
+    <script type="module" src="./physics-check.ts"></script>
+  </body>
+</html>

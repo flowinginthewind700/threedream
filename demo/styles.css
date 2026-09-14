@@ -337,6 +337,33 @@ html, body {
   border-radius: 4px;
   padding: 1px 4px;
 }
+.foot.is-warn { color: var(--rose); }
+
+/* --- report: mono log lines, used by the check pages ---
+ * Wrapping and a height cap are both load-bearing: these hold adapter limit
+ * dumps and digest strings, which are wider than the sidebar and longer than a
+ * panel should be. Scrolling inside the block keeps the layout fixed while the
+ * content grows, so a longer log cannot push the panels below it around.
+ */
+.report {
+  margin: 0;
+  padding: 8px 9px;
+  list-style: none;
+  max-height: 240px;
+  overflow-y: auto;
+  border: 1px solid var(--line-soft);
+  border-radius: 6px;
+  background: var(--bg-deep);
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.65;
+  color: var(--text-dim);
+  overflow-wrap: anywhere;
+}
+.report li + li { margin-top: 2px; }
+.report li.is-head { color: var(--text); }
+.report li.is-good { color: var(--teal); }
+.report li.is-warn { color: var(--rose); }
 
 /* --- narrow screens: stack the sidebar under the viewport --- */
 @media (max-width: 880px) {
