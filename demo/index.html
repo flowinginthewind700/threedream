@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ThreeDream - learn to play in the browser</title>
+    <meta
+      name="description"
+      content="ThreeDream: a deterministic ECS + fixed-timestep physics runtime with an in-browser reinforcement-learning trainer. Watch a policy learn to drive and reach, live."
+    />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="app">
+      <header class="topbar">
+        <div class="brand">
+          <span class="logo" id="brand-logo" aria-hidden="true"></span>
+          <div class="brand-text">
+            <h1>ThreeDream</h1>
+            <p>Deterministic physics + in-browser RL, on three.js</p>
+          </div>
+        </div>
+        <div class="segmented" id="task-select" role="tablist" aria-label="Task">
+          <button class="seg is-active" data-task="drive" role="tab" aria-selected="true">
+            <span class="seg-icon" data-icon="bot"></span> Drive
+          </button>
+          <button class="seg" data-task="reach" role="tab" aria-selected="false">
+            <span class="seg-icon" data-icon="target"></span> Reach
+          </button>
+        </div>
+      </header>
+
+      <main class="stage">
+        <div class="viewport" id="viewport">
+          <div class="viewport-overlay" id="overlay">
+            <span class="badge" id="mode-badge">random policy</span>
+          </div>
+          <div class="loading" id="loading">Building scene&hellip;</div>
+        </div>
+
+        <aside class="sidebar" aria-label="Controls">
+          <section class="panel">
+            <h2 class="panel-title"><span data-icon="cpu"></span> Training</h2>
+            <div class="row">
+              <button class="btn btn-primary" id="train-btn">
+                <span data-icon="play"></span><span class="btn-label">Train</span>
+              </button>
+              <button class="btn" id="speed-btn" title="Training speed">
+                <span data-icon="zap"></span><span class="btn-label">1x</span>
+              </button>
+            </div>
+            <div class="spark-wrap">
+              <canvas id="sparkline" width="280" height="64" aria-label="Episode return"></canvas>
+              <div class="spark-caption">mean episode return</div>
+            </div>
+          </section>
+
+          <section class="panel">
+            <h2 class="panel-title"><span data-icon="activity"></span> Playback</h2>
+            <div class="segmented segmented-full" id="mode-select" role="tablist" aria-label="Policy mode">
+              <button class="seg is-active" data-mode="policy" role="tab" aria-selected="true">
+                <span data-icon="brain"></span> Learned
+              </button>
+              <button class="seg" data-mode="random" role="tab" aria-selected="false">
+                <span data-icon="shuffle"></span> Random
+              </button>
+            </div>
+            <div class="row">
+              <button class="btn" id="pause-btn" title="Pause / resume simulation">
+                <span data-icon="pause"></span><span class="btn-label">Pause</span>
+              </button>
+              <button class="btn" id="reset-btn" title="Reset episode">
+                <span data-icon="rotate-ccw"></span><span class="btn-label">Reset</span>
+              </button>
+            </div>
+          </section>
+
+          <section class="panel">
+            <h2 class="panel-title"><span data-icon="gauge"></span> Stats</h2>
+            <dl class="stats">
+              <div><dt>episodes trained</dt><dd id="stat-episodes">0</dd></div>
+              <div><dt>updates</dt><dd id="stat-updates">0</dd></div>
+              <div><dt>success (live)</dt><dd id="stat-success">&mdash;</dd></div>
+              <div><dt>batch return</dt><dd id="stat-return">&mdash;</dd></div>
+              <div><dt>policy &sigma;</dt><dd id="stat-sigma">&mdash;</dd></div>
+              <div><dt>sim fps</dt><dd id="stat-fps">&mdash;</dd></div>
+            </dl>
+          </section>
+
+          <p class="foot">
+            The trainer here is the same <code>Trainer.train()</code> that runs headless in
+            <code>npm run train</code> and CI &mdash; no browser-only code path.
+          </p>
+        </aside>
+      </main>
+    </div>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

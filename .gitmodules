@@ -1,0 +1,5 @@
+[submodule "thirdparty/UnrealEngine"]
+	path = thirdparty/UnrealEngine
+	url = https://github.com/EpicGames/UnrealEngine.git
+	branch = release
+	shallow = true

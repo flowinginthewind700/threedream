@@ -1,0 +1,8 @@
+{
+  "//": "Node-hosted code: training scripts and tests. Imports src/, so it keeps the DOM lib (src/render uses it) and only widens `types` to add Node globals.",
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "types": ["node", "vitest/globals"]
+  },
+  "include": ["src", "scripts", "tests", "vitest.config.ts"]
+}
