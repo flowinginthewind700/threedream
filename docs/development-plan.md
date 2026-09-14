@@ -30,11 +30,13 @@
 
 仓库已经有一个能跑、能测、能部署的内核：
 
-- 251 个单元测试，`npm run verify` 全绿。
-- GitHub Actions 四关卡：类型检查与构建、测试、覆盖率、浏览器渲染。
-- Pages 自动部署，线上 demo 可用。
+- 359 个单元测试 + 68 个原生 Rust 测试 + 19 个浏览器测试，`npm run verify` 全绿。
+- GitHub Actions 五任务四关卡：类型检查与构建、覆盖率、浏览器渲染、Rust 内核与
+  wasm 产物校验。
+- Pages 自动部署，线上 demo 可用：训练页、`physics-check`、`shared-device`。
 - 确定性 ECS、固定步长引擎、事件总线。
-- `PhysicsBackend` 抽象，已有 `builtin` 与 `rapier` 两个实现。
+- `PhysicsBackend` 抽象，已有 `builtin`、`wasm`（自研 Rust 内核）与 `rapier` 三个实现。
+- `src/gpu/capabilities.ts`：运行时能力探测与渲染档位选择（webgpu / webgl2 / cpu）。
 - 带策略梯度的强化学习器，可在页面内训练。
 - three.js 渲染桥，渲染层不回写仿真状态。
 
@@ -88,6 +90,8 @@
 
 ### M0：把计划变成可执行基线
 
+状态：已完成（2026-09-15）。
+
 时间：1 周。
 
 任务：
@@ -104,7 +108,24 @@
 - Rust workspace 能构建出 wasm。
 - 浏览器测试能证明共享 `GPUDevice`、共享 buffer、外部 WGSL 绑定三条事实。
 
+落地证据：
+
+- `rust/` 三个 crate：`physics`（求解器，不依赖 wasm-bindgen）、`physics-wasm`
+  （cdylib，只有 ABI）、`gpu`（wgpu 骨架）。wgpu 锁 `=25.0.2`，工具链锁 `1.98.1`，
+  `tests/rust_workspace.test.ts` 钉住这些锁定与 release profile。
+- `npm run build:wasm:gpu` 证明锁定的 wgpu 能为 `wasm32-unknown-unknown` 编译，
+  CI 的 `rust` 关卡每次都跑它。
+- `src/gpu/capabilities.ts` 做运行时探测（adapter、feature set、limits，以及
+  `core` 与 `compatibility` 两个 feature level）；`selectRenderTier` 只接收探测
+  结果，所以回退不可能是编译期分支。Node 侧由 `tests/gpu_capabilities.test.ts`
+  用 stub adapter 覆盖。
+- `bench_shared_device.mjs` 的三条断言现在是页面加测试：`demo/shared-device.html`
+  与 `e2e/shared_device.spec.ts`，后者在 CI 的 `chromium-webgpu` project 下用
+  ANGLE/Vulkan 拿真实 `GPUDevice`。
+
 ### M1：确定性 Rust wasm 物理内核
+
+状态：已完成（2026-09-15）。
 
 时间：2–3 周。
 
@@ -123,6 +144,25 @@
 - 关键基准不低于 TS 版本 2x。
 - Node、浏览器、回放三处结果一致。
 - 所有现有环境与训练任务不改调用方即可切换后端。
+
+落地证据：
+
+- `rust/crates/physics` 是 `src/physics/builtin.ts` 的移植，不依赖 wasm-bindgen，
+  所以 `npm run test:rust`（68 个测试）能在原生侧检查求解器自身的不变量。
+- ABI 只传数字：world id、body handle，以及调用方用 `td_alloc` 分配的 f64
+  缓冲区。没有字符串、结构体或 `Result`；错误以负数哨兵返回，并在 TS 侧翻译成
+  与 `BuiltinPhysics` 完全相同的 `Error` / `RangeError`。
+- `WASM_ABI_VERSION`（TS）与 `ABI_VERSION`（Rust）由 `tests/rust_workspace.test.ts`
+  双向钉住；`scripts/check_wasm_artifact.mjs` 再把 `WasmBindings` 与二进制导出表
+  双向比对，并检查产物确实带 `simd128`、由锁定工具链构建、不含泄漏的本地路径。
+- 位级一致性走摘要而不是走两两比较：`src/physics/reference.ts` 定义规范场景与
+  基于 IEEE-754 原始比特的 `REFERENCE_GOLDEN_DIGEST`，Node
+  （`tests/wasm_backend.test.ts`）、浏览器（`demo/physics-check.html` 加
+  `e2e/wasm_physics.spec.ts`）与同一 seed 的回放三处都必须复现它。
+- 性能门槛设在 2x，实测 400 体场景 2.58x、60 体场景 4.85x；两个基准场景同时被
+  检查逐位一致，避免「测的不是跑的那份计算」。
+- 调用方零改动：`ReachEnv` / `DriveEnv` 只认 `PhysicsBackend`，`physics-check`
+  页面可实时切换后端跑同一场景。`builtin.ts` 保留为规范实现与回退。
 
 ### M2：共享 GPUDevice 的 WebGPU 桥
 
@@ -251,8 +291,14 @@
 
 ## 立即行动
 
-1. 建 `rust/` workspace 与 wasm crate。
-2. 锁 wgpu v25，加入 CI。
-3. 新增 `WasmPhysicsBackend`。
-4. 把共享 `GPUDevice` 断言并入浏览器测试。
-5. 做一个 50k 粒子的 WebGPU demo，并保留 WebGL2 回退。
+M0 与 M1 已落地，证据见各里程碑下的「落地证据」。接下来按 M2 -> M3 推进：
+
+1. 把 `requestDevice()` 与 `WebGPURenderer` 收敛成单例设备管理器：目前
+   `demo/shared-device.ts` 里是一次性的证明代码，还不是可复用 API。
+2. 在 `src/gpu/` 增加外部 WGSL compute pipeline 的通用封装，并把那三条断言迁进
+   去，让 demo 只负责展示。
+3. 设备丢失与上下文丢失的恢复路径：`selectRenderTier` 已经能给出档位，缺的是
+   运行中丢设备之后的处理。
+4. 给 `npm run train` 加 `--backend wasm`：env 早就接受 `backend` 选项，缺的只是
+   脚本入口；补上之后无头训练才能用上这个内核。
+5. 做一个 50k 粒子的 WebGPU demo，并保留 WebGL2 回退（M3）。
