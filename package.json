@@ -12,14 +12,17 @@
     "dev": "vite",
     "build": "tsc -p tsconfig.build.json && vite build",
     "build:pages": "VITE_BASE=/threedream/ npm run build",
+    "build:wasm": "cd rust && wasm-pack build crates/physics-wasm --target web --out-dir ../../../wasm/pkg --release",
     "preview": "vite preview",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.scripts.json --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "COVERAGE=1 vitest run --coverage",
     "test:e2e": "playwright test",
+    "test:rust": "cd rust && cargo test -p threedream-physics",
     "train": "tsx scripts/train_headless.ts",
-    "verify": "npm run typecheck && npm run test && npm run build"
+    "verify": "npm run typecheck && npm run test && npm run build",
+    "check:wasm": "node scripts/check_wasm_artifact.mjs"
   },
   "dependencies": {
     "@dimforge/rapier3d-compat": "^0.20.0",

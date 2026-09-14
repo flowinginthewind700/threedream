@@ -1,0 +1,35 @@
+# The wasm ABI crate. Nothing but `wasm-bindgen` and the solver.
+#
+# This is the layer that decides what crosses the boundary, and the rule it
+# follows is: *numbers only*. No `#[wasm_bindgen]` structs with Rust fields, no
+# `Vec<f64>` returns, no strings. Every export takes and returns scalars, or
+# writes into a caller-supplied pointer. Two reasons, both measured rather than
+# aesthetic:
+#
+#   1. A struct exported by wasm-bindgen is an opaque JS handle with a
+#      per-field getter call. Reading twelve doubles out of a `BodyState` struct
+#      is twelve JS->wasm transitions; reading them out of one
+#      `Float64Array.subarray` is zero.
+#   2. Returning a `Vec` allocates in wasm linear memory and hands JS a copy.
+#      The training loop reads every body's state every step, so that is a
+#      per-step allocation on the hot path for data the caller already has
+#      storage for.
+#
+# `crate-type` includes `rlib` so the workspace can `cargo check` this crate on
+# the host. It is only ever *shipped* as the cdylib that `wasm-pack build`
+# produces into `wasm/pkg`.
+
+[package]
+name = "threedream-physics-wasm"
+description = "Stable wasm ABI over threedream-physics; src/physics/wasm.ts is its only caller"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+threedream-physics = { workspace = true }
+wasm-bindgen = { workspace = true }

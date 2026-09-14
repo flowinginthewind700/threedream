@@ -1,0 +1,30 @@
+# wgpu skeleton for the M2 shared-`GPUDevice` bridge.
+#
+# Deliberately wasm32-gated. A native wgpu build pulls in Vulkan/GL/DX12
+# loaders that nothing in this repo's test suite exercises, and `cargo test` at
+# the workspace root would pay for compiling all of them on every run. The
+# dependency is therefore attached to the wasm target only, and the native build
+# of this crate is an empty `no_std`-free library that exists so the workspace
+# resolves.
+#
+# `wgpu = "=25.0.2"` (pinned in the workspace root) is load-bearing: the
+# feasibility study measured that v25 -> v30 changes `InstanceDescriptor`,
+# `push_constant_ranges`, and the return type of `request_adapter`, and that v25
+# has no `from_web` interop. `tests/rust_workspace.test.ts` asserts the pin.
+
+[package]
+name = "threedream-gpu"
+description = "wgpu skeleton for the M2 shared-GPUDevice bridge (wasm32-only)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "threedream_gpu"
+path = "src/lib.rs"
+
+[dependencies]
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wgpu = { workspace = true }

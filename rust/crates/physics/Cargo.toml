@@ -1,0 +1,16 @@
+[package]
+name = "threedream-physics"
+description = "Deterministic rigid-body solver: the Rust port of src/physics/builtin.ts"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "threedream_physics"
+path = "src/lib.rs"
+
+# No dependencies, on purpose. This crate is the reference solver for the wasm
+# backend and the thing the bit-exactness tests compare against; every
+# dependency would be another source of platform-specific arithmetic.
+[dependencies]

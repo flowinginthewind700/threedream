@@ -1,0 +1,11 @@
+# Pinned, not "stable". The wasm backend advertises `deterministic: true`, and
+# that claim is only meaningful if the binary is reproducible: a toolchain bump
+# is a codegen change, and a codegen change is the kind of thing that can move
+# the last bit of a fused expression. Rust's own guarantee is that wasm f64
+# arithmetic is IEEE-754 without contraction or reassociation, so any 1.85+
+# build should agree -- but "should" is not a gate, so the version is written
+# down and CI installs exactly this one.
+[toolchain]
+channel = "1.98.1"
+components = ["clippy", "rustfmt"]
+targets = ["wasm32-unknown-unknown"]

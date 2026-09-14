@@ -1,0 +1,17 @@
+{
+  "name": "threedream-physics-wasm",
+  "type": "module",
+  "description": "Stable wasm ABI over threedream-physics; src/physics/wasm.ts is its only caller",
+  "version": "0.1.0",
+  "license": "MIT",
+  "files": [
+    "threedream_physics_wasm_bg.wasm",
+    "threedream_physics_wasm.js",
+    "threedream_physics_wasm.d.ts"
+  ],
+  "main": "threedream_physics_wasm.js",
+  "types": "threedream_physics_wasm.d.ts",
+  "sideEffects": [
+    "./snippets/*"
+  ]
+}

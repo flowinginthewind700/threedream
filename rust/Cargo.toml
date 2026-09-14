@@ -1,0 +1,49 @@
+# ThreeDream Rust workspace.
+#
+# Three crates, one dependency policy:
+#
+#   physics      the deterministic rigid-body solver, ported bit-for-bit from
+#                `src/physics/builtin.ts`. No wasm-bindgen, so it also builds
+#                and tests natively (`cargo test`), which is what makes the
+#                solver's own invariants checkable without a browser.
+#   physics-wasm cdylib: the stable wasm ABI (`src/physics/wasm.ts` is its only
+#                caller). Depends on wasm-bindgen and nothing else.
+#   gpu          wgpu skeleton for the M2 shared-GPUDevice bridge. wasm32-only
+#                by design; a native build of wgpu pulls in Vulkan/GL loaders
+#                that no test here needs.
+#
+# Version pinning is deliberate and load-bearing. `docs/feasibility-rust-wasm-
+# webgpu.md` measured that wgpu 25 -> 30 changes `InstanceDescriptor`,
+# `push_constant_ranges` and the return type of `request_adapter`, and that v25
+# has no `from_web` interop. The workspace therefore pins `=25.0.2` and treats
+# an upgrade as its own task, not as a `cargo update`. `tests/rust_workspace.test.ts`
+# asserts the pins so a casual bump cannot land silently.
+
+[workspace]
+resolver = "2"
+members = ["crates/physics", "crates/physics-wasm", "crates/gpu"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+rust-version = "1.85"
+
+[workspace.dependencies]
+threedream-physics = { path = "crates/physics", version = "0.1.0" }
+wasm-bindgen = "=0.2.128"
+wgpu = "=25.0.2"
+
+# The measured configuration from the feasibility study (opt-level 3 + fat LTO +
+# one codegen unit was worth 2.43x over JS; the default release profile is not).
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+debug = false
+
+[profile.release-debug]
+inherits = "release"
+debug = true
+strip = "debuginfo"

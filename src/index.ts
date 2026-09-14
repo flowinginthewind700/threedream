@@ -11,7 +11,10 @@
  *   render  three.js bridge                        (the only layer importing three)
  *
  * Everything except `render` and `physics/rapier` runs in bare Node, which is
- * what makes headless training and CI possible.
+ * what makes headless training and CI possible. `physics/wasm` is the exception
+ * that still belongs to that group: it runs in Node too, because
+ * `loadWasmKernel` reads the `.wasm` bytes through `node:fs` when the glue
+ * resolves to a `file:` URL.
  *
  * For that reason `render` is deliberately *not* re-exported here: importing
  * this barrel must not pull three.js into a training script. Browser code
@@ -70,6 +73,13 @@ export type {
 } from './physics/types.js';
 export { BuiltinPhysics, createBuiltinPhysics } from './physics/builtin.js';
 export { RapierPhysics, createRapierPhysics } from './physics/rapier.js';
+export {
+  WasmPhysics,
+  createWasmPhysics,
+  WASM_ABI_VERSION,
+  loadWasmKernel,
+} from './physics/wasm.js';
+export type { WasmPhysicsOptions, WasmKernel } from './physics/wasm.js';
 export {
   PhysicsSystem,
   RigidBodyComponent,

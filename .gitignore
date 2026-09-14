@@ -1,6 +1,12 @@
 node_modules/
 dist/
 coverage/
+# Cargo's build dir. The wasm artifact that *is* committed lives in `wasm/pkg`,
+# and wasm-pack writes its own `*` ignore file there; the tracked files are
+# immune to it, so a bare checkout can run tests, the demo, and Pages without a
+# Rust toolchain. `scripts/check_wasm_artifact.mjs` is what keeps those bytes
+# honest in CI.
+rust/target/
 *.log
 .DS_Store
 .idea/

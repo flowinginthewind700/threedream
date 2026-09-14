@@ -1,0 +1,19 @@
+# Cargo reads `.cargo/config.toml` from the *working directory* upward, not from
+# the manifest path, so every wasm build in this repo runs with `rust/` as cwd
+# (see `build:wasm` and `test:rust` in package.json). Running cargo from the repo root
+# would silently drop these flags -- `tests/rust_workspace.test.ts` pins the
+# scripts that keep cwd correct.
+
+# SIMD128 is the whole point of moving the solver to Rust (M1, task 3). It is a
+# target feature rather than a crate feature because the guarantee we need is
+# narrow: wasm f64x2 lanes perform exactly the same IEEE-754 operations as the
+# scalar code they replace, so enabling it cannot change a result. `relaxed-simd`
+# is deliberately NOT enabled -- it permits reassociation and fused multiply-add,
+# which would break bit-exactness with the TS reference solver.
+[target.wasm32-unknown-unknown]
+rustflags = ["-C", "target-feature=+simd128"]
+
+[build]
+# Native `cargo test` builds the solver crate only; the wgpu skeleton is
+# wasm32-gated, so a host build never needs Vulkan/GL loaders.
+target-dir = "target"
