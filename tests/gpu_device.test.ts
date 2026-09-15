@@ -18,202 +18,28 @@ import {
   gpuConstantsFrom,
   requiredLimitsFor,
   sharedDevices,
-  type DeviceGpuLike,
-  type GpuBufferLike,
-  type GpuCommandEncoderLike,
-  type GpuComputePassLike,
   type GpuConstants,
-  type GpuDeviceAdapterLike,
-  type GpuDeviceLike,
-  type GpuDeviceLostInfo,
-  type GpuQueueLike,
-  type GpuShaderModuleLike,
 } from '../src/gpu/device.js';
+import {
+  STUB_CONSTANTS as CONSTANTS,
+  StubAdapter,
+  StubDevice,
+  StubGpu,
+  stubLimits as coreLimits,
+  type StubAdapterSpec,
+  type StubLevelSpec,
+} from './stub_webgpu.js';
 
 const MIB = 1024 * 1024;
 
-/** The spec's bit values, injected because Node has no WebGPU globals. */
-const CONSTANTS: GpuConstants = {
-  bufferUsage: {
-    MAP_READ: 1,
-    MAP_WRITE: 2,
-    COPY_SRC: 4,
-    COPY_DST: 8,
-    INDEX: 16,
-    VERTEX: 32,
-    UNIFORM: 64,
-    STORAGE: 128,
-  },
-  mapMode: { READ: 1, WRITE: 2 },
-  shaderStage: { VERTEX: 1, FRAGMENT: 2, COMPUTE: 4 },
-};
-
-function coreLimits(overrides: Record<string, number> = {}): Record<string, number> {
-  return {
-    maxComputeInvocationsPerWorkgroup: 256,
-    maxComputeWorkgroupSizeX: 256,
-    maxComputeWorkgroupSizeY: 256,
-    maxComputeWorkgroupSizeZ: 64,
-    maxComputeWorkgroupsPerDimension: 65535,
-    maxStorageBufferBindingSize: 128 * MIB,
-    maxBufferSize: 256 * MIB,
-    maxBindGroups: 4,
-    maxStorageBuffersPerShaderStage: 8,
-    maxUniformBufferBindingSize: 64 * 1024,
-    ...overrides,
-  };
-}
-
-// ---------------------------------------------------------------------------
-// stubs
-// ---------------------------------------------------------------------------
-
-interface StubDevice extends GpuDeviceLike {
-  destroyCalls: number;
-  readonly destroyed: boolean;
-  readonly buffers: Array<{ size: number; usage: number }>;
-  readonly submits: number;
-  /** Resolve `lost`, as an implementation does when the driver goes away. */
-  lose(info?: GpuDeviceLostInfo): void;
-  /** Reject `lost`, which the spec forbids and some implementations do anyway. */
-  failLost(error: unknown): void;
-}
-
-function stubDevice(options: { limits?: Record<string, number>; features?: string[] } = {}): StubDevice {
-  const features = options.features ?? [];
-  let resolveLost!: (info: GpuDeviceLostInfo) => void;
-  let rejectLost!: (error: unknown) => void;
-  const lost = new Promise<GpuDeviceLostInfo>((resolve, reject) => {
-    resolveLost = resolve;
-    rejectLost = reject;
-  });
-  const buffers: Array<{ size: number; usage: number }> = [];
-  const stub: StubDevice = {
-    features: { has: (name: string) => features.includes(name) },
-    limits: options.limits ?? coreLimits(),
-    lost,
-    queue: {
-      submit() {
-        state.submits++;
-      },
-      writeBuffer() {
-        state.writes++;
-      },
-      onSubmittedWorkDone: async () => undefined,
-    } as GpuQueueLike,
-    createBuffer(descriptor) {
-      buffers.push({ size: descriptor.size, usage: descriptor.usage });
-      return {
-        size: descriptor.size,
-        usage: descriptor.usage,
-        mapState: 'unmapped',
-        mapAsync: async () => undefined,
-        getMappedRange: () => new ArrayBuffer(descriptor.size),
-        unmap() {},
-        destroy() {},
-      } as GpuBufferLike;
-    },
-    createShaderModule(): GpuShaderModuleLike {
-      return { getCompilationInfo: async () => ({ messages: [] }) };
-    },
-    createBindGroupLayout: () => ({ layout: true }),
-    createBindGroup: () => ({ group: true }),
-    createPipelineLayout: () => ({ pipelineLayout: true }),
-    createComputePipeline: () => ({ pipeline: true }),
-    createCommandEncoder(): GpuCommandEncoderLike {
-      return {
-        beginComputePass(): GpuComputePassLike {
-          return { setPipeline() {}, setBindGroup() {}, dispatchWorkgroups() {}, end() {} };
-        },
-        copyBufferToBuffer() {},
-        finish: () => ({}),
-      };
-    },
-    destroy() {
-      state.destroyCalls++;
-    },
-    lose(info) {
-      resolveLost(info ?? { reason: 'unknown', message: 'lost by the stub' });
-    },
-    failLost(error) {
-      rejectLost(error);
-    },
-    get destroyCalls() {
-      return state.destroyCalls;
-    },
-    get destroyed() {
-      return state.destroyCalls > 0;
-    },
-    buffers,
-    get submits() {
-      return state.submits;
-    },
-  };
-  const state = { destroyCalls: 0, submits: 0, writes: 0 };
-  return stub;
-}
-
-interface AdapterSpec {
-  limits?: Record<string, number>;
-  features?: string[];
-  isCompatibilityMode?: boolean;
-  info?: { vendor?: string; architecture?: string };
-  /** What `requestDevice` hands back, or the error it throws. */
-  device?: StubDevice | Error;
-}
-
-interface StubAdapter extends GpuDeviceAdapterLike {
-  readonly deviceRequests: Array<{ label?: string; requiredLimits?: Record<string, number>; requiredFeatures?: readonly string[] }>;
-  readonly spec: AdapterSpec;
-  readonly device: StubDevice;
-}
-
-function stubAdapter(spec: AdapterSpec = {}): StubAdapter {
-  const device =
-    spec.device instanceof Error || spec.device === undefined ? stubDevice({ limits: spec.limits }) : spec.device;
-  const deviceRequests: StubAdapter['deviceRequests'] = [];
-  return {
-    spec,
-    device,
-    deviceRequests,
-    features: { has: (name: string) => (spec.features ?? []).includes(name) },
-    limits: spec.limits ?? coreLimits(),
-    info: spec.info ?? { vendor: 'intel', architecture: 'gen-9' },
-    ...(spec.isCompatibilityMode === undefined ? {} : { isCompatibilityMode: spec.isCompatibilityMode }),
-    requestDevice: async (descriptor) => {
-      deviceRequests.push(descriptor ?? {});
-      if (spec.device instanceof Error) throw spec.device;
-      return device;
-    },
-  };
-}
-
-type LevelSpec = AdapterSpec | StubAdapter | Error | null;
-
-interface StubGpu extends DeviceGpuLike {
-  readonly asked: string[];
-  readonly adapters: StubAdapter[];
-}
-
-/** A `GPU` whose adapters are keyed by feature level, as a browser's are not. */
-function stubGpu(byLevel: Partial<Record<'core' | 'compatibility', LevelSpec>>): StubGpu {
-  const asked: string[] = [];
-  const adapters: StubAdapter[] = [];
-  return {
-    asked,
-    adapters,
-    requestAdapter: async (options) => {
-      const level = options?.featureLevel ?? 'core';
-      asked.push(level);
-      const spec = byLevel[level];
-      if (!spec) return null;
-      if (spec instanceof Error) throw spec;
-      const adapter = 'requestDevice' in spec ? (spec as StubAdapter) : stubAdapter(spec);
-      adapters.push(adapter);
-      return adapter;
-    },
-  };
-}
+/** Stub constructors, so the cases below read as data rather than as plumbing. */
+const stubDevice = (
+  init: { limits?: Record<string, number>; features?: string[] } = {},
+): StubDevice => new StubDevice(init);
+const stubAdapter = (spec: StubAdapterSpec = {}): StubAdapter => new StubAdapter(spec);
+const stubGpu = (
+  byLevel: Partial<Record<'core' | 'compatibility', StubLevelSpec>>,
+): StubGpu => new StubGpu(byLevel);
 
 function manager(gpu: StubGpu | undefined, constants: GpuConstants | null = CONSTANTS): SharedDeviceManager {
   return new SharedDeviceManager({ gpu, constants });
