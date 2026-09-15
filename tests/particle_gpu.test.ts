@@ -736,7 +736,7 @@ describe('refusing a world that will not fit', () => {
   it('rejects a shader that fails to compile, and leaves nothing behind', async () => {
     const { device, shared } = stubbed();
     device.setCompilationMessages([
-      { type: 'error', message: 'unknown identifier', lineNum: 12, linePos: 3 },
+      { type: 'error', message: 'unknown identifier', lineNum: 12 },
     ]);
     const error = await createGpuParticleSystem({ shared, field: seededField(8) }).then(
       () => null,
