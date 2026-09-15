@@ -322,7 +322,9 @@ describe('forEachCandidate', () => {
     hash.build(field);
     let current = 0;
     const seen: string[] = [];
-    const visit = (j: number): void => seen.push(`${current}:${j}`);
+    const visit = (j: number): void => {
+      seen.push(`${current}:${j}`);
+    };
     for (const i of [0, 1]) {
       current = i;
       hash.forEachCandidate(field, i, visit);
