@@ -277,15 +277,36 @@ export class StubPipeline {
   ) {}
 }
 
+/** One resolved bind-group entry: the buffer, and the range if it was given. */
+export interface StubBindGroupEntry {
+  readonly binding: number;
+  readonly buffer: StubBuffer;
+  readonly offset?: number;
+  readonly size?: number;
+}
+
 export class StubBindGroup {
   constructor(
     readonly layout: StubBindGroupLayout,
-    readonly entries: ReadonlyArray<{ binding: number; resource: StubBuffer }>,
+    readonly entries: ReadonlyArray<StubBindGroupEntry>,
   ) {}
 
   bufferAt(binding: number): StubBuffer | undefined {
-    return this.entries.find((e) => e.binding === binding)?.resource;
+    return this.entries.find((e) => e.binding === binding)?.buffer;
   }
+
+  entryAt(binding: number): StubBindGroupEntry | undefined {
+    return this.entries.find((e) => e.binding === binding);
+  }
+}
+
+/** A `GPUBufferBinding` (`{ buffer, offset?, size? }`) rather than a bare buffer. */
+function isStubBufferView(value: unknown): value is {
+  buffer?: StubBuffer;
+  offset?: number;
+  size?: number;
+} {
+  return typeof value === 'object' && value !== null && 'buffer' in value;
 }
 
 export interface StubDeviceInit {
@@ -404,12 +425,18 @@ export class StubDevice implements GpuDeviceLike {
     const entries = (
       descriptor.entries as ReadonlyArray<{
         binding: number;
-        resource: { buffer?: StubBuffer } | StubBuffer;
+        resource: { buffer?: StubBuffer; offset?: number; size?: number } | StubBuffer;
       }>
-    ).map((e) => ({
-      binding: e.binding,
-      resource: ('buffer' in e.resource ? e.resource.buffer : e.resource) as StubBuffer,
-    }));
+    ).map((e): StubBindGroupEntry => {
+      const view = e.resource;
+      const bare = isStubBufferView(view) ? view.buffer : (view as StubBuffer);
+      return {
+        binding: e.binding,
+        buffer: bare as StubBuffer,
+        offset: isStubBufferView(view) ? view.offset : undefined,
+        size: isStubBufferView(view) ? view.size : undefined,
+      };
+    });
     const group = new StubBindGroup(descriptor.layout as StubBindGroupLayout, entries);
     this.bindGroups.push(group);
     return group;
