@@ -361,6 +361,41 @@ describe('ParticleView construction', () => {
     view.dispose();
   });
 
+  it('gives a GPU-backed view the attribute three.js keeps a buffer for', async () => {
+    const rig = await gpuRig(32);
+    const view = new ParticleView({ system: rig.system, renderer: rig.renderer });
+    const attribute = view.mesh.instanceMatrix as THREE.InstancedBufferAttribute & {
+      isStorageInstancedBufferAttribute?: boolean;
+    };
+    // A plain `InstancedBufferAttribute` is wrapped in an `InstancedInterleavedBuffer`
+    // by the time the shader node is built, so `backend.get(instanceMatrix).buffer`
+    // is undefined and there is nothing to copy into. Only the storage attribute
+    // stays reachable by itself.
+    expect(attribute.isStorageInstancedBufferAttribute).toBe(true);
+    expect(attribute.usage, 'a dynamic attribute is re-uploaded over the blit').toBe(
+      THREE.StaticDrawUsage,
+    );
+    expect(attribute.count).toBe(32);
+    expect(attribute.itemSize).toBe(INSTANCE_FLOATS);
+    view.dispose();
+    rig.system.dispose();
+  });
+
+  it('keeps the dynamic attribute on every tier that cannot blit', async () => {
+    const rig = await gpuRig(16);
+    const withoutRenderer = new ParticleView({ system: rig.system });
+    expect(withoutRenderer.mesh.instanceMatrix.usage).toBe(THREE.DynamicDrawUsage);
+    withoutRenderer.dispose();
+
+    const cpu = new ParticleView({
+      system: createCpuParticleSystem({ field: seededField(16) }),
+      renderer: rig.renderer,
+    });
+    expect(cpu.mesh.instanceMatrix.usage).toBe(THREE.DynamicDrawUsage);
+    cpu.dispose();
+    rig.system.dispose();
+  });
+
   it('starts on the CPU path with nothing to report', () => {
     const view = new ParticleView({ system: createCpuParticleSystem({ field: seededField(8) }) });
     expect(view.viewMode).toBe('cpu');
@@ -576,6 +611,64 @@ describe('ParticleView attaching to the GPU', () => {
     rig.system.dispose();
   });
 
+  it('says so when three.js never exposes a destination buffer', async () => {
+    const rig = await gpuRig(32);
+    rig.renderer.handle = undefined;
+    const view = new ParticleView({ system: rig.system, renderer: rig.renderer });
+    expect(view.update()).toBe('cpu-upload');
+    expect(view.gpuError, 'one frame is only "not rendered yet"').toBeNull();
+    expect(view.update()).toBe('cpu-upload');
+    expect(
+      view.gpuError,
+      'two frames means this module is looking somewhere three.js does not keep it',
+    ).toMatch(/GPUBuffer/);
+    expect(view.viewMode).toBe('cpu');
+    const once = view.gpuError;
+    view.update();
+    view.update();
+    expect(view.gpuError, 'one verdict, not one per frame').toBe(once);
+    view.dispose();
+    rig.system.dispose();
+  });
+
+  it('withdraws that verdict when the buffer arrives late', async () => {
+    const rig = await gpuRig(32);
+    rig.renderer.handle = undefined;
+    const view = new ParticleView({ system: rig.system, renderer: rig.renderer });
+    view.update();
+    view.update();
+    expect(view.gpuError).not.toBeNull();
+    // A diagnostic that outlived its cause would be worse than none: `gpuError`
+    // gates attachment, so a stale one pins a working page to the CPU path.
+    rig.renderer.handle = { buffer: rig.target };
+    expect(view.update()).toBe('cpu-upload');
+    expect(view.gpuError).toBeNull();
+    expect(await view.settled()).toBe('gpu');
+    view.dispose();
+    rig.system.dispose();
+  });
+
+  it('never blames three.js on a tier that was never going to blit', async () => {
+    const rig = await gpuRig(16);
+    const headless = new ParticleView({ system: rig.system });
+    headless.update();
+    headless.update();
+    headless.update();
+    expect(headless.gpuError, 'no renderer is a choice, not a failure').toBeNull();
+    headless.dispose();
+
+    const cpu = new ParticleView({
+      system: createCpuParticleSystem({ field: seededField(16) }),
+      renderer: new FakeRenderer(),
+    });
+    cpu.update();
+    cpu.update();
+    cpu.update();
+    expect(cpu.gpuError).toBeNull();
+    cpu.dispose();
+    rig.system.dispose();
+  });
+
   it('blits the matrices into the buffer three.js owns', async () => {
     const rig = await gpuRig(128);
     const view = new ParticleView({ system: rig.system, renderer: rig.renderer });
@@ -692,7 +785,13 @@ describe('ParticleView attaching to the GPU', () => {
     expect(rig.shared.references).toBe(before);
     expect(buf(rig.device, 'particle-view').destroyed).toBe(true);
     expect(buf(rig.device, 'particle-view:params').destroyed).toBe(true);
-    expect(rig.system.publish.raw.destroyed, 'the simulation outlives the renderer').toBe(false);
+    // `raw` is the structural `GpuBufferLike`, which has `destroy()` but not the
+    // stub's `destroyed` flag. The rig builds every buffer on a `StubDevice`, so
+    // naming the class here is the assertion rather than a weakening of it.
+    expect(
+      (rig.system.publish.raw as StubBuffer).destroyed,
+      'the simulation outlives the renderer',
+    ).toBe(false);
     rig.system.dispose();
   });
 
@@ -741,6 +840,24 @@ describe('ParticleView when the GPU path fails', () => {
     view.update();
     view.update();
     expect(rig.device.modules.length, 'a compile error is not transient').toBe(modules);
+    view.dispose();
+    rig.system.dispose();
+  });
+
+  it('keeps a device failure as the reason even if the buffer then disappears', async () => {
+    const rig = await gpuRig(64);
+    rig.device.setCompilationMessages([{ type: 'error', message: 'bad syntax', lineNum: 3 }]);
+    const view = new ParticleView({ system: rig.system, renderer: rig.renderer });
+    view.update();
+    await view.settled();
+    expect(view.gpuError).toMatch(/bad syntax/);
+    rig.renderer.handle = undefined;
+    view.update();
+    view.update();
+    expect(
+      view.gpuError,
+      'the reason a caller can act on outranks the missing-buffer diagnostic',
+    ).toMatch(/bad syntax/);
     view.dispose();
     rig.system.dispose();
   });

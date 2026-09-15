@@ -29,7 +29,23 @@
  * is a fallback nobody believes. It also means the tier can change at runtime
  * without rebuilding anything.
  *
- * # Why the GPU path attaches late, and quietly
+ * # Which attribute the mesh gets, and why it decides everything
+ *
+ * three.js builds the instance-matrix shader node differently per attribute kind
+ * (`createInstanceMatrixNode`): a plain `InstancedBufferAttribute` becomes either
+ * a uniform-buffer node or four nodes over an `InstancedInterleavedBuffer` whose
+ * `GPUBuffer` is keyed on the *interleaved* buffer, never on the attribute. In
+ * both cases `backend.get(instanceMatrix).buffer` is `undefined`, so there is
+ * nothing to copy into and the blit path cannot exist. A
+ * `StorageInstancedBufferAttribute` is created with
+ * `STORAGE | VERTEX | COPY_SRC | COPY_DST` and stays reachable by the attribute
+ * itself -- which is the only reason the device-side copy is possible at all.
+ *
+ * So a GPU-backed view swaps `instanceMatrix` for a storage attribute at
+ * construction, before three.js has compiled anything. Doing it later would need
+ * the render object thrown away and rebuilt.
+ *
+ * # Why the GPU path attaches late, and never quietly
  *
  * three.js creates an attribute's `GPUBuffer` when the mesh is first rendered, so
  * a freshly constructed view cannot see one yet. `update()` therefore starts the
@@ -38,9 +54,24 @@
  * or the device is lost, `gpuError` says why and the mesh keeps drawing. A page
  * that went blank because a *renderer* could not get a compute pipeline would be
  * the exact failure the capability matrix exists to prevent.
+ *
+ * The converse is guarded too. A buffer that never appears is not a device
+ * condition, it is this module's assumption about three.js being wrong -- the
+ * silent form of the same failure, and the one that costs the most to find. So
+ * the second `update()` with a GPU system and no reachable buffer records a
+ * `gpuError` rather than falling back without a word. It clears itself if the
+ * buffer does arrive on a later frame: a slow first render is not a broken
+ * assumption, and a diagnostic that outlives its cause would pin the view to the
+ * CPU path on a page where the GPU path works.
  */
 
-import * as THREE from 'three';
+// `three/webgpu`, not `three`: `StorageInstancedBufferAttribute`, the attribute
+// that makes the blit path reachable at all, only exists in the WebGPU build.
+// Both builds load the same `three.core.js`, so the scene-graph classes are the
+// identical objects either way and a page may import `three` elsewhere -- as
+// `src/render/scene.ts` does, for its `WebGLRenderer` -- without ending up with
+// two copies of the library.
+import * as THREE from 'three/webgpu';
 
 import type { GpuBufferLike } from '../gpu/device.js';
 import { PARTICLE_OFFSET, PARTICLE_STRIDE } from '../gpu/particleField.js';
@@ -67,6 +98,32 @@ export type ParticleFrameMode = 'gpu-blit' | 'cpu-upload';
 
 /** Which fill path the view is settled on. `cpu` until a blit has succeeded. */
 export type ParticleViewMode = 'gpu' | 'cpu';
+
+/**
+ * The `instanceMatrix` attribute for this tier.
+ *
+ * See the header for why the GPU case has to be a storage attribute. It also
+ * must *not* be `DynamicDrawUsage`: three.js re-uploads a dynamic attribute every
+ * frame, which would overwrite the blitted matrices with the stale CPU array.
+ * The CPU fallback sets `needsUpdate` itself when it writes, so it still uploads
+ * -- including the one pass the constructor makes, which is what keeps the first
+ * frame correct on every tier.
+ */
+function instanceAttributeFor(
+  gpu: GpuParticleSystem | null,
+  renderer: RendererLike | null,
+  count: number,
+): THREE.InstancedBufferAttribute {
+  if (gpu !== null && renderer !== null) {
+    return new THREE.StorageInstancedBufferAttribute(count, INSTANCE_FLOATS);
+  }
+  const attribute = new THREE.InstancedBufferAttribute(
+    new Float32Array(count * INSTANCE_FLOATS),
+    INSTANCE_FLOATS,
+  );
+  attribute.setUsage(THREE.DynamicDrawUsage);
+  return attribute;
+}
 
 /**
  * Above this many instances the spheres get cheaper.
@@ -201,6 +258,20 @@ function asGpuSystem(system: ParticleSystem): GpuParticleSystem | null {
   return system as GpuParticleSystem;
 }
 
+/**
+ * How many consecutive frames a GPU-backed view may go without seeing a
+ * destination buffer before that stops being "three.js has not rendered yet".
+ *
+ * Two, because the buffer is created during the first render and `update()` runs
+ * before it: frame one legitimately sees nothing, frame two does not.
+ */
+const STUCK_WITHOUT_BUFFER_FRAMES = 2;
+
+/** The `gpuError` recorded when the buffer never shows up. Compared by identity. */
+const NO_BUFFER_ERROR =
+  `three.js exposed no GPUBuffer for instanceMatrix in ${STUCK_WITHOUT_BUFFER_FRAMES} frames; ` +
+  'the blit path cannot attach and the view is uploading from the CPU';
+
 // ---------------------------------------------------------------------------
 // the view
 // ---------------------------------------------------------------------------
@@ -242,6 +313,8 @@ export class ParticleView {
   private lastFrame: ParticleFrameMode = 'cpu-upload';
   private lastBytes = 0;
   private disposedFlag = false;
+  private framesWithoutBuffer = 0;
+  private noBufferError = false;
 
   constructor(options: ParticleViewOptions) {
     const system = options.system;
@@ -269,7 +342,7 @@ export class ParticleView {
     // call the moment the camera turned, which looks exactly like a simulation
     // that stopped.
     this.mesh.frustumCulled = false;
-    this.mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    this.mesh.instanceMatrix = instanceAttributeFor(this.gpu, this.renderer, system.count);
 
     // One CPU pass up front: it makes the first frame correct on every tier, and
     // it means a re-upload by three.js -- after a context restore, say -- carries
@@ -343,8 +416,11 @@ export class ParticleView {
     if (this.disposedFlag) throw new Error('ParticleView has been disposed');
 
     const target = this.targetBuffer();
-    if (target && !this.expander && !this.attaching && !this.gpuErrorText) {
-      this.beginAttach();
+    if (target === null) {
+      this.noteMissingBuffer();
+    } else {
+      this.noteBufferFound();
+      if (!this.expander && !this.attaching && !this.gpuErrorText) this.beginAttach();
     }
 
     if (this.expander && target) {
@@ -374,6 +450,40 @@ export class ParticleView {
     // is that "stale" must never be silent.
     this.uploadFromField();
     return 'cpu-upload';
+  }
+
+  /**
+   * Count frames a GPU-backed view had nowhere to blit.
+   *
+   * Only before attachment: once the expander exists, a missing buffer is a lost
+   * device and `expandTo` reports it. The failure this catches is quieter -- a
+   * view that uploads from the CPU forever, with `frameMode` saying `cpu-upload`
+   * and `gpuError` saying nothing, because three.js keeps the buffer somewhere
+   * this module does not look. That is a wrong assumption about three.js rather
+   * than a device condition, and finding it in the wild costs a profiler.
+   */
+  private noteMissingBuffer(): void {
+    if (this.gpu === null || this.renderer === null || this.expander !== null) return;
+    this.framesWithoutBuffer++;
+    if (this.framesWithoutBuffer < STUCK_WITHOUT_BUFFER_FRAMES) return;
+    if (this.noBufferError || this.gpuErrorText !== null) return;
+    this.noBufferError = true;
+    this.gpuErrorText = NO_BUFFER_ERROR;
+  }
+
+  /**
+   * Undo the above when the buffer turns up after all.
+   *
+   * A slow first render -- a shader compile, a tab that was backgrounded -- is
+   * not a broken assumption, and a diagnostic that outlives its cause is worse
+   * than none: `gpuError` gates attachment, so leaving it set would pin the view
+   * to the CPU path on a page where the GPU path works.
+   */
+  private noteBufferFound(): void {
+    this.framesWithoutBuffer = 0;
+    if (!this.noBufferError) return;
+    this.noBufferError = false;
+    if (this.gpuErrorText === NO_BUFFER_ERROR) this.gpuErrorText = null;
   }
 
   /** Change the drawn radius without touching the simulation. */
