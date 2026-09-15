@@ -454,6 +454,15 @@ comes from a checksummed tarball rather than `curl | sh`: that installer is a
 mutable ref on a third-party repo, and this is the tool minting the binary the
 determinism claim rests on.
 
+Byte-exactness needs one more thing pinned, and it is not in `Cargo.toml`:
+wasm-pack fetches the `wasm-bindgen` *CLI* itself, and a prebuilt release asset
+stamps the artifact's `producers` section with the tag's git hash where a
+`cargo install` fallback stamps the bare version. Same CLI version, identical
+behaviour, 12 different bytes, which the freshness check cannot tell apart from
+real drift. `scripts/check_wasm_artifact.mjs` therefore pins the stamp
+(`WASM_BINDGEN_CLI`), so a source-built CLI fails provenance with the reason
+printed instead of turning up as an unexplained hash mismatch.
+
 本项目采用测试先行：`src/` 下每个模块都有对应 spec，一旦出现没有测试的新模块，
 `tests/tdd.test.ts` 会让构建失败。
 
@@ -478,6 +487,13 @@ determinism claim rests on.
 产物，然后重建并要求字节完全一致。wasm-pack 从带校验和的 tarball 安装，而不是
 `curl | sh`：安装脚本是第三方仓库上的可变 ref，而它正是铸造整个确定性承诺所依赖
 的那个二进制的工具。
+
+要让「字节完全一致」成立，还有样东西必须钉住，而它不在 `Cargo.toml` 里：wasm-pack 会
+自己去取 `wasm-bindgen` *CLI*，预编译的 release 产物在 `producers` 段里打上 tag 的 git
+哈希，`cargo install` 兜底则只打版本号。CLI 版本相同、行为完全相同，字节却差 12 个 ——
+新鲜度检查分不出这与真正的漂移。所以 `scripts/check_wasm_artifact.mjs` 把这个印记也钉住
+（`WASM_BINDGEN_CLI`）：源码编译出来的 CLI 会在 provenance 关卡失败并打印原因，而不是
+表现为一次无法解释的哈希不匹配。
 
 ## Unreal Engine reference (opt-in)
 

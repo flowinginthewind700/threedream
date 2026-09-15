@@ -17,8 +17,8 @@
  *                table are the same set in both directions. One-sided checks
  *                pass on a stale TS interface *or* a dropped Rust `#[wasm_bindgen]`.
  *   provenance   the binary's `producers` section names the toolchain and the
- *                wasm-bindgen version the workspace pins, and no build machine's
- *                filesystem leaked into it.
+ *                wasm-bindgen version and CLI build the workspace pins, and no
+ *                build machine's filesystem leaked into it.
  *   behaviour    the artifact is instantiated and stepped here, in Node, against
  *                closed-form expectations. This is the only place the *shipped*
  *                bytes are executed outside a browser.
@@ -80,6 +80,23 @@ const RUNTIME_EXPORTS = new Set([
  * "module not found" in the page and passes every Node test here.
  */
 const FORBIDDEN_IMPORT_MODULES = ['wasi_snapshot_preview1', 'wasi_unstable', 'env'];
+/**
+ * The `wasm-bindgen` CLI stamp the committed artifact must carry, exactly.
+ *
+ * The crate pin in `rust/Cargo.toml` is `=0.2.128`, which fixes the *library*.
+ * The *CLI* that wasm-pack runs to emit `wasm/pkg` is a separate binary it
+ * fetches on its own, and it stamps the `producers` section with whichever
+ * build it happens to be: the prebuilt release asset carries the tag's git
+ * hash, `0.2.128 (246946fdd)`, while a `cargo install` fallback carries the
+ * bare version, `0.2.128`. Same CLI version, 12 different bytes in the
+ * artifact -- enough to fail CI's byte-exact baseline check while every
+ * behavioural check still passes, which reads as drift and is not.
+ *
+ * So the stamp is pinned here too. Whoever rebuilds `wasm/pkg` must use the
+ * CLI whose hash is written down; a source-built one then fails on
+ * provenance, with the reason printed, instead of on a mystery hash diff.
+ */
+const WASM_BINDGEN_CLI = '0.2.128 (246946fdd)';
 
 // ---------------------------------------------------------------------------
 // CLI
@@ -507,13 +524,17 @@ async function checkProvenance(pkgDir, binary, mod) {
 
   const cargoToml = readFileSync(join(ROOT, 'rust', 'Cargo.toml'), 'utf8');
   const cargoLock = parseCargoLock(readFileSync(join(ROOT, 'rust', 'Cargo.lock'), 'utf8'));
-  await check('wasm-bindgen version agrees with Cargo.toml pin and Cargo.lock', () => {
+  await check('wasm-bindgen agrees with the crate pin and the pinned CLI stamp', () => {
     const pin = workspacePin(cargoToml, 'wasm-bindgen');
     assert(pin, 'rust/Cargo.toml does not pin wasm-bindgen with "=x.y.z"');
     assertEqual(cargoLock.get('wasm-bindgen'), pin, 'Cargo.lock wasm-bindgen');
+    assert(
+      WASM_BINDGEN_CLI.startsWith(`${pin} `),
+      `WASM_BINDGEN_CLI "${WASM_BINDGEN_CLI}" is not a build of the pinned crate ${pin}`,
+    );
     const bindgen = producers['processed-by']?.find((p) => p.name === 'wasm-bindgen');
     assert(bindgen, 'producers names no wasm-bindgen: the artifact was not wasm-pack built');
-    assertEqual(bindgen.version, pin, 'binary wasm-bindgen');
+    assertEqual(bindgen.version, WASM_BINDGEN_CLI, 'binary wasm-bindgen');
     return `wasm-bindgen ${bindgen.version}`;
   });
 
