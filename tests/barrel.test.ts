@@ -18,6 +18,11 @@
  *   2. The M3 particle stack is reachable from the barrel and runs headless. The
  *      CPU tier is the deterministic reference, so a replay driven entirely
  *      through public exports must reproduce itself.
+ *   3. The M4 soft-body stack is reachable the same way, and the two graph passes
+ *      that decide how the device is fed -- islands and coloring -- are public
+ *      API rather than internals of the GPU backend. A consumer sizing a buffer
+ *      or checking that a mesh can be solved without a race should not have to
+ *      import `gpu/softColoring.js` by path to find out.
  */
 
 import { readFileSync } from 'node:fs';
@@ -203,6 +208,125 @@ describe('the M3 particle stack is public API', () => {
     expect(handle.system.steps).toBe(4);
     expect(handle.system.time, 'simulated time is steps * fixedDt').toBeCloseTo(dt * 4, 9);
 
+    handle.dispose();
+  });
+});
+
+describe('the M4 soft-body stack is public API', () => {
+  it('exports the mesh, both graph passes, both backends, the factory and the frame loop', () => {
+    const names = [
+      'SoftMesh',
+      'groupIslands',
+      'colorConstraints',
+      'coloringIsRaceFree',
+      'CpuSoftSystem',
+      'GpuSoftSystem',
+      'SoftRunner',
+      'createCpuSoftSystem',
+      'createGpuSoftSystem',
+      'createSoftSystem',
+      'createSoftRunner',
+      'probeSoft',
+      'resolveSoftOptions',
+      'buildSoftLayout',
+      'writeSoftParams',
+      'softShaderSource',
+      'softSolveDispatch',
+      'softGpuBudget',
+      'sizeForScene',
+    ] as const;
+    for (const name of names) {
+      const value = (api as Record<string, unknown>)[name];
+      expect(typeof value, `${name} is not exported from the barrel`).toBe('function');
+    }
+    // The constants a consumer needs to size a buffer, a dispatch or a solve.
+    expect(api.SOFT_STRIDE, 'floats per node').toBe(8);
+    expect(api.SOFT_WORKGROUP_SIZE, 'the plan pins the workgroup size at 64').toBe(64);
+    expect(api.SOFT_FIXED_DISPATCHES, 'the five kernels every step records').toBe(5);
+    expect(api.MAX_COLORS, 'one u32 mask per node').toBe(32);
+    expect(api.SOFT_SCENES, 'the scenes a mesh can be').toEqual(['cloth', 'sheets', 'cube', 'rope']);
+  });
+
+  it('groups islands and colors the graph without a race, from public exports', () => {
+    // "island 并行与约束着色通过确定性对照测试", at the surface a consumer touches:
+    // the same mesh produces the same plan twice, and the coloring it produces is
+    // the one the race check accepts.
+    const mesh = new api.SoftMesh({ count: 900, seed: 4242, scene: 'cloth' });
+    const islands = api.groupIslands(mesh);
+    const coloring = api.colorConstraints(mesh);
+    const again = api.colorConstraints(new api.SoftMesh({ count: 900, seed: 4242, scene: 'cloth' }));
+
+    expect(islands.islands, 'one cloth is one island').toBe(1);
+    expect(islands.nodes).toBe(900);
+    expect(islands.paddedNodes % api.SOFT_WORKGROUP_SIZE, 'padding is sized to the workgroup').toBe(0);
+    expect(Array.from(coloring.colorOfConstraint)).toEqual(Array.from(again.colorOfConstraint));
+    expect(coloring.colors, 'a cloth with diagonals needs more than four colors').toBeGreaterThan(4);
+    expect(api.coloringIsRaceFree(coloring, mesh), 'two edges of one color share a node').toBe(true);
+    // A sheet scene is the multi-island case, and the counts have to add up.
+    const sheets = new api.SoftMesh({ count: 600, seed: 7, scene: 'sheets', groups: 3 });
+    const grouped = api.groupIslands(sheets);
+    expect(grouped.islands, 'three disconnected cloths').toBe(3);
+    expect(
+      Array.from(grouped.islandSizes).reduce((a, b) => a + b, 0),
+      'island sizes sum to the node count',
+    ).toBe(600);
+  });
+
+  it('runs a deterministic cloth replay through nothing but barrel exports', async () => {
+    // The acceptance criterion "CPU 层不因 GPU 层引入而变得不可测", at the surface a
+    // consumer actually touches: no deep imports, no device, no DOM.
+    const run = async (): Promise<{ digest: string; escaped: number; steps: number }> => {
+      const mesh = new api.SoftMesh({ count: 400, seed: 1234, scene: 'cloth' });
+      const handle = await api.createSoftSystem({ mesh, tier: 'cpu', options: { iterations: 4 } });
+      expect(handle.gpu, 'the CPU tier must not have acquired a device').toBeNull();
+      expect(handle.system.deterministic, 'the reference backend is the deterministic one').toBe(
+        true,
+      );
+      handle.system.advance(20);
+      const stats = handle.system.stats();
+      const out = {
+        digest: handle.system.digest(),
+        escaped: stats.escaped,
+        steps: handle.system.steps,
+      };
+      handle.dispose();
+      return out;
+    };
+
+    const first = await run();
+    const second = await run();
+    expect(first.steps, 'advance(20) did not advance').toBe(20);
+    expect(first.escaped, 'a node left the box').toBe(0);
+    expect(first.digest, 'the same seed produced a different cloth').toBe(second.digest);
+    // `hex:count`, where the count is the number of f32 words digested rather than
+    // the number of nodes: 400 nodes times SOFT_STRIDE.
+    expect(first.digest, 'a digest is hex:words').toMatch(
+      new RegExp(`^[0-9a-f]+:${400 * api.SOFT_STRIDE}$`),
+    );
+  });
+
+  it('drives the cloth from a frame loop whose rate is not the step rate', async () => {
+    const mesh = new api.SoftMesh({ count: 200, seed: 7, scene: 'cloth' });
+    const handle = await api.createSoftSystem({ mesh, tier: 'cpu' });
+    const runner = new api.SoftRunner(handle.system);
+    const dt = handle.system.fixedDt;
+
+    expect(runner.frame(dt * 0.4), 'a frame shorter than a step must not step').toBe(0);
+    expect(handle.system.steps).toBe(0);
+    expect(runner.frame(dt * 4.5), 'a long frame is worth four whole steps').toBe(4);
+    expect(handle.system.steps).toBe(4);
+    expect(handle.system.time, 'simulated time is steps * fixedDt').toBeCloseTo(dt * 4, 9);
+
+    handle.dispose();
+  });
+
+  it('refuses a step size the backend would not honour', async () => {
+    // `SoftRunner` is the one place a caller can ask for a clock whose step differs
+    // from the system's, and it throws rather than simulating one rate and reporting
+    // another. Pinned here because the barrel is where a consumer finds it.
+    const mesh = new api.SoftMesh({ count: 64, seed: 3, scene: 'rope' });
+    const handle = await api.createSoftSystem({ mesh, tier: 'cpu' });
+    expect(() => new api.SoftRunner(handle.system, { fixedDt: 1 / 30 })).toThrow(/disagrees/);
     handle.dispose();
   });
 });

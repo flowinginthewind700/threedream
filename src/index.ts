@@ -6,7 +6,8 @@
  *
  *   core    clock / ECS / events / engine facade   (no three.js, no WASM)
  *   physics backend interface + three solvers      (no three.js; WASM on demand)
- *   gpu     probing, shared device, compute, particles (no three.js, no WASM)
+ *   gpu     probing, shared device, compute, particles,
+ *           soft bodies                            (no three.js, no WASM)
  *   ai      MLP, Gaussian policy, REINFORCE trainer (no three.js, no WASM)
  *   envs    learning tasks                         (physics only)
  *   render  three.js bridge                        (the only layer importing three)
@@ -29,6 +30,12 @@
  * a device -- and only the view that turns its output into an `InstancedMesh`
  * lives in `render/`. `tests/barrel.test.ts` pins this by importing the barrel
  * in bare Node.
+ *
+ * `SoftView` (`src/render/soft.ts`) is the M4 half of the same rule, and the
+ * soft stack below it is the same shape: a mesh generator, an island grouper, a
+ * constraint colorer, a CPU reference solver, the WGSL generated from that
+ * reference's constants, and the GPU backend -- all headless, all reachable from
+ * this barrel, with only the surface-and-wireframe view in `render/`.
  */
 
 export { Rng, createRng } from './core/rng.js';
@@ -244,6 +251,115 @@ export type {
   ParticleSystemRequest,
   TierFallback,
 } from './gpu/particles.js';
+
+export type {
+  ResolvedSoftOptions,
+  SoftBoundsMode,
+  SoftPlan,
+  SoftSimOptions,
+  SoftStepStats,
+  SoftSystem,
+} from './gpu/softTypes.js';
+export {
+  DEFAULT_JITTER,
+  RADIUS_BOX_FRACTION,
+  RADIUS_FRACTION,
+  SCENE_EXTENT_FRACTION,
+  SOFT_BYTES,
+  SOFT_OFFSET,
+  SOFT_SCENES,
+  SOFT_STIFFNESS,
+  SOFT_STRIDE,
+  SoftMesh,
+  assertConstraints,
+  assertTriangles,
+  defaultExtent,
+  emptyConstraints,
+  sizeForScene,
+} from './gpu/softMesh.js';
+export type {
+  SoftConstraints,
+  SoftMeshOptions,
+  SoftMeshSpec,
+  SoftScene,
+  SoftSceneSize,
+} from './gpu/softMesh.js';
+export {
+  NODE_SENTINEL,
+  SOFT_WORKGROUP_SIZE,
+  groupIslands,
+  isSentinel,
+  softWorkgroups,
+} from './gpu/softIslands.js';
+export type { IslandInput, SoftIslands } from './gpu/softIslands.js';
+export {
+  MAX_COLORS,
+  colorConstraints,
+  coloringIsRaceFree,
+  coloringWorkgroups,
+} from './gpu/softColoring.js';
+export type { SoftBatch, SoftColoring } from './gpu/softColoring.js';
+export {
+  DEFAULT_SOFT_GRAVITY,
+  DEFAULT_SOFT_OPTIONS,
+  MAX_SOFT_ITERATIONS,
+  SOFT_BOUNDS_MODE_BITS,
+  SOFT_FIXED_DISPATCHES,
+  SOFT_FLAG,
+  SOFT_PARAM_WORD,
+  SOFT_PARAMS_BYTES,
+  SOFT_PARAMS_FLOATS,
+  assertMeshFits,
+  buildSoftLayout,
+  resolveSoftOptions,
+  writeSoftParams,
+} from './gpu/softOptions.js';
+export type { SoftLayout, SoftParamsFrame } from './gpu/softOptions.js';
+export { CpuSoftSystem, createCpuSoftSystem } from './gpu/softCpu.js';
+export type { CpuSoftSystemOptions } from './gpu/softCpu.js';
+export {
+  SOFT_BASELINE_STORAGE_BUFFERS,
+  SOFT_BATCH_STRIDE_BYTES,
+  SOFT_BATCH_U32_PER_COLOR,
+  SOFT_BINDINGS,
+  SOFT_EDGE_F32_PER_CONSTRAINT,
+  SOFT_ENDS_U32_PER_CONSTRAINT,
+  SOFT_GROUP_STATE,
+  SOFT_GROUP_STATIC,
+  SOFT_KERNELS,
+  SOFT_KERNEL_DISPATCH,
+  SOFT_ORDER_U32_PER_CONSTRAINT,
+  SOFT_PRED_VECS_PER_NODE,
+  SOFT_PUBLISH_FLOATS_PER_NODE,
+  SOFT_SLEEP_WORDS_PER_ISLAND,
+  SOFT_STATE_FLOATS_PER_NODE,
+  SOFT_STATE_VECS_PER_NODE,
+  SOFT_STAT_WORD,
+  SOFT_STAT_WORDS,
+  SOFT_STORAGE_BINDINGS,
+  SOFT_WGSL_PARAMS_LAYOUT,
+  softBindingsForGroup,
+  softShaderSource,
+  softSolveDispatch,
+} from './gpu/softWgsl.js';
+export type {
+  SoftBindingKind,
+  SoftBufferType,
+  SoftKernel,
+  SoftKernelDispatch,
+  SoftParamKind,
+  SoftWgslBinding,
+  SoftWgslParamMember,
+} from './gpu/softWgsl.js';
+export { GpuSoftSystem, createGpuSoftSystem, softGpuBudget } from './gpu/softGpu.js';
+export type { GpuSoftSystemOptions, SoftGpuBudget } from './gpu/softGpu.js';
+export { SoftRunner, createSoftRunner, createSoftSystem, probeSoft } from './gpu/soft.js';
+export type {
+  SoftProbe,
+  SoftProbeRequest,
+  SoftSystemHandle,
+  SoftSystemRequest,
+} from './gpu/soft.js';
 
 export { Mlp } from './ai/mlp.js';
 export type { MlpSpec, MlpSnapshot } from './ai/mlp.js';
