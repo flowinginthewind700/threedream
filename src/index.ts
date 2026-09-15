@@ -6,7 +6,7 @@
  *
  *   core    clock / ECS / events / engine facade   (no three.js, no WASM)
  *   physics backend interface + three solvers      (no three.js; WASM on demand)
- *   gpu     capability probing + tier selection    (no three.js, no WASM)
+ *   gpu     probing, shared device, compute, particles (no three.js, no WASM)
  *   ai      MLP, Gaussian policy, REINFORCE trainer (no three.js, no WASM)
  *   envs    learning tasks                         (physics only)
  *   render  three.js bridge                        (the only layer importing three)
@@ -23,7 +23,12 @@
  * For that reason `render` is deliberately *not* re-exported here: importing
  * this barrel must not pull three.js into a training script. Browser code
  * imports `ThreeRenderer` from `threedream/render` (`src/render/scene.ts`)
- * directly.
+ * directly. `ParticleView` (`src/render/particles.ts`) is the M3 half of that
+ * rule: the whole `gpu/particle*` stack below runs headless -- the CPU tier is
+ * the deterministic reference precisely so that replay and training never need
+ * a device -- and only the view that turns its output into an `InstancedMesh`
+ * lives in `render/`. `tests/barrel.test.ts` pins this by importing the barrel
+ * in bare Node.
  */
 
 export { Rng, createRng } from './core/rng.js';
@@ -121,6 +126,124 @@ export type {
   WebGpuCapabilities,
   Webgl2Capabilities,
 } from './gpu/capabilities.js';
+
+export {
+  REQUESTED_LIMITS,
+  SharedDevice,
+  SharedDeviceManager,
+  acquireSharedDevice,
+  deviceGpuFrom,
+  gpuConstantsFrom,
+  requiredLimitsFor,
+  sharedDevices,
+} from './gpu/device.js';
+export type {
+  DeviceFailure,
+  DeviceFailureReason,
+  DeviceGpuLike,
+  GpuBufferLike,
+  GpuCommandEncoderLike,
+  GpuCompilationMessage,
+  GpuComputePassLike,
+  GpuConstants,
+  GpuDeviceAdapterLike,
+  GpuDeviceLike,
+  GpuDeviceLostInfo,
+  GpuQueueLike,
+  GpuShaderModuleLike,
+  SharedDeviceInfo,
+  SharedDeviceOptions,
+} from './gpu/device.js';
+
+export {
+  ComputeBuffer,
+  ComputeContext,
+  ComputeProgram,
+  PingPong,
+  ShaderCompilationError,
+  rawBuffer,
+  submitCopy,
+} from './gpu/compute.js';
+export type {
+  ComputeBinding,
+  ComputeBufferOptions,
+  ComputeBufferType,
+  ComputeBufferView,
+  ComputeDispatch,
+  ComputeProgramOptions,
+  ComputeResource,
+  CopyPair,
+  ReadbackSource,
+} from './gpu/compute.js';
+
+export type {
+  BoundsMode,
+  ParticleSimOptions,
+  ParticleStepStats,
+  ParticleSystem,
+  ResolvedParticleOptions,
+} from './gpu/particleTypes.js';
+export {
+  DEFAULT_BOUNDS,
+  DEFAULT_RADIUS,
+  PARTICLE_BYTES,
+  PARTICLE_STRIDE,
+  ParticleField,
+  boundsCenter,
+  boundsInradius,
+  boundsSize,
+} from './gpu/particleField.js';
+export type { Bounds, ParticleFieldOptions, ParticleScene, Vec3Tuple } from './gpu/particleField.js';
+export { DEFAULT_BUCKET_CAPACITY, SpatialHash, hashCellCoords, nextPow2 } from './gpu/particleHash.js';
+export type { SpatialHashOptions, SpatialHashStats } from './gpu/particleHash.js';
+export {
+  DEFAULT_GRAVITY,
+  DEFAULT_PARTICLE_OPTIONS,
+  assertFieldFits,
+  effectiveCellSize,
+  resolveParticleOptions,
+} from './gpu/particleOptions.js';
+export {
+  CpuParticleSystem,
+  POSITION_CORRECTION,
+  createCpuParticleSystem,
+} from './gpu/particleCpu.js';
+export type { CpuParticleSystemOptions } from './gpu/particleCpu.js';
+export {
+  GpuParticleSystem,
+  createGpuParticleSystem,
+  gpuBufferBudget,
+  tableSizeFor,
+} from './gpu/particleGpu.js';
+export type { GpuBufferBudget, GpuParticleSystemOptions } from './gpu/particleGpu.js';
+export {
+  INSTANCE_BYTES,
+  INSTANCE_FLOATS,
+  InstanceExpander,
+  instanceBufferBytes,
+  instanceShaderSource,
+} from './gpu/particleInstances.js';
+export type { InstanceExpanderOptions } from './gpu/particleInstances.js';
+export {
+  PARTICLE_KERNELS,
+  WORKGROUP_SIZE,
+  particleShaderSource,
+  workgroupsFor,
+} from './gpu/particleWgsl.js';
+export type { ParticleKernel, WgslBinding, WgslParamMember } from './gpu/particleWgsl.js';
+export {
+  ParticleRunner,
+  createParticleRunner,
+  createParticleSystem,
+  probeParticles,
+} from './gpu/particles.js';
+export type {
+  ParticleProbe,
+  ParticleProbeRequest,
+  ParticleSystemHandle,
+  ParticleSystemRequest,
+  TierFallback,
+} from './gpu/particles.js';
 
 export { Mlp } from './ai/mlp.js';
 export type { MlpSpec, MlpSnapshot } from './ai/mlp.js';
