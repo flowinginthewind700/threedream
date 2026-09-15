@@ -30,7 +30,7 @@ const SERVE = 'npm run build:pages && npx vite preview --base /threedream/ --por
  * `demo/`, `physics-check` and the fallback half of `particles` only need *a* GL
  * context, and headless Chromium has none, so they run on SwiftShader: that the
  * render layer works without hardware is the property worth testing.
- * `shared-device` and `particles_gpu` need a real `GPUDevice`, which
+ * `shared-device`, `particles_gpu` and `soft_gpu` need a real `GPUDevice`, which
  * SwiftShader-as-GL cannot provide -- they need ANGLE's Vulkan backend with the
  * WebGPU service enabled. Same browser, different flags, and a flag set that
  * works for one silently downgrades the other, so they are separate projects
@@ -57,7 +57,7 @@ const WEBGPU_ARGS = [
 ];
 
 /** Specs that need the WebGPU project, and must not run under SwiftShader. */
-const WEBGPU_SPECS = /(shared_device|particles_gpu)\.spec\.ts/;
+const WEBGPU_SPECS = /(shared_device|particles_gpu|soft_gpu)\.spec\.ts/;
 
 export default defineConfig({
   testDir: './e2e',

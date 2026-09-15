@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ThreeDream - GPU soft bodies</title>
+    <meta
+      name="description"
+      content="ThreeDream M4: up to 20,000 soft-body nodes solved by coloured constraint batches in WGSL compute on the same GPUDevice three.js renders with, drawn as one indexed surface, with WebGL2 and CPU fallbacks."
+    />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="app">
+      <header class="topbar">
+        <div class="brand">
+          <span class="logo" id="brand-logo" aria-hidden="true"></span>
+          <div class="brand-text">
+            <h1>ThreeDream</h1>
+            <p>GPU soft bodies: one device, one shared position attribute, three tiers</p>
+          </div>
+        </div>
+        <!--
+          Same bar as the particle page, for the same reason: M4's acceptance
+          criterion is that a WebGL2 machine still gets a cloth, and the way to
+          see that is to ask for a worse tier on a good machine and watch the
+          counters stay alive.
+        -->
+        <div class="segmented" id="tier-select" role="tablist" aria-label="Render tier">
+          <button class="seg is-active" data-tier="auto" role="tab" aria-selected="true">
+            <span data-icon="waypoints"></span> Auto
+          </button>
+          <button class="seg" data-tier="webgpu" role="tab" aria-selected="false">
+            <span data-icon="zap"></span> WebGPU
+          </button>
+          <button class="seg" data-tier="webgl2" role="tab" aria-selected="false">
+            <span data-icon="layers"></span> WebGL2
+          </button>
+          <button class="seg" data-tier="cpu" role="tab" aria-selected="false">
+            <span data-icon="cpu"></span> CPU
+          </button>
+        </div>
+      </header>
+
+      <main class="stage">
+        <div class="viewport" id="viewport">
+          <div class="viewport-overlay" id="overlay">
+            <span class="badge" id="tier-badge">no adapter</span>
+            <span class="badge" id="scene-badge">cloth</span>
+            <span class="badge" id="count-badge">0 nodes</span>
+            <span class="badge" id="path-badge">cpu-upload</span>
+            <span class="badge" id="fps-badge">0 fps</span>
+          </div>
+          <!-- The page boots on load; this is the pre-probe / no-JS state. -->
+          <div class="loading" id="loading">Probing adapters&hellip;</div>
+        </div>
+
+        <aside class="sidebar" aria-label="Soft-body controls and results">
+          <section class="panel">
+            <h2 class="panel-title"><span data-icon="shield-check"></span> Tier</h2>
+            <dl class="stats">
+              <div><dt>running on</dt><dd id="ti-tier">&mdash;</dd></div>
+              <div><dt>asked for</dt><dd id="ti-requested">&mdash;</dd></div>
+              <div><dt>renderer backend</dt><dd id="ti-backend">&mdash;</dd></div>
+              <div><dt>device shared</dt><dd id="ti-device">&mdash;</dd></div>
+              <div><dt>vertex path</dt><dd id="ti-path">&mdash;</dd></div>
+              <div><dt>blitted / frame</dt><dd id="ti-blit">&mdash;</dd></div>
+              <div><dt>race-free solve</dt><dd id="ti-race">&mdash;</dd></div>
+              <div><dt>feature level</dt><dd id="ti-level">&mdash;</dd></div>
+            </dl>
+            <p class="foot" id="verdict">Not built yet.</p>
+          </section>
+
+          <section class="panel">
+            <h2 class="panel-title"><span data-icon="grid-3x3"></span> Simulation</h2>
+            <!--
+              Which button carries `is-active` IS the initial state, read by
+              initialSelected() rather than restated in JS. Two declarations of
+              one value drift silently; the sibling page has the scar.
+            -->
+            <div class="segmented segmented-full" id="scene-select" role="tablist" aria-label="Mesh scene">
+              <button class="seg is-active" data-scene="cloth" role="tab" aria-selected="true">Cloth</button>
+              <button class="seg" data-scene="sheets" role="tab" aria-selected="false">Sheets</button>
+              <button class="seg" data-scene="cube" role="tab" aria-selected="false">Cube</button>
+              <button class="seg" data-scene="rope" role="tab" aria-selected="false">Rope</button>
+            </div>
+            <div class="segmented segmented-full" id="count-select" role="tablist" aria-label="Node count">
+              <button class="seg" data-count="1000" role="tab" aria-selected="false">1k</button>
+              <button class="seg" data-count="5000" role="tab" aria-selected="false">5k</button>
+              <button class="seg is-active" data-count="10000" role="tab" aria-selected="true">10k</button>
+              <button class="seg" data-count="20000" role="tab" aria-selected="false">20k</button>
+            </div>
+            <div class="slider-row">
+              <label
+                for="iterations-slider"
+                title="Gauss-Seidel sweeps per fixed step. A correction travels about one row of the mesh per sweep, so a deep lattice needs several of them."
+                >solver iterations</label
+              >
+              <input id="iterations-slider" type="range" min="1" max="16" step="1" value="8" />
+              <output id="iterations-value" for="iterations-slider">8</output>
+            </div>
+            <div class="slider-row">
+              <label for="stiffness-slider" title="How much of each constraint correction is applied per sweep">stiffness</label>
+              <input id="stiffness-slider" type="range" min="0" max="1" step="0.05" value="1" />
+              <output id="stiffness-value" for="stiffness-slider">1.00</output>
+            </div>
+            <div class="row">
+              <button class="btn" id="wire-btn" aria-pressed="false" title="Draw the constraint graph over the surface">
+                <span data-icon="spline"></span><span class="btn-label">Wire</span>
+              </button>
+              <button class="btn" id="sleep-btn" aria-pressed="false" title="Let islands that come to rest stop being solved">
+                <span data-icon="moon"></span><span class="btn-label">Sleep</span>
+              </button>
+            </div>
+            <div class="row">
+              <button class="btn btn-primary" id="run-btn" title="Pause / resume the frame loop">
+                <span data-icon="pause"></span><span class="btn-label">Pause</span>
+              </button>
+              <button class="btn" id="reset-btn" title="Rebuild the mesh from the same seed">
+                <span data-icon="rotate-ccw"></span><span class="btn-label">Reset</span>
+              </button>
+            </div>
+            <!--
+              The number that most often gets misread on this page, said once
+              where the knob that controls it lives. Iterations buy reach, not
+              stiffness, and a cloth hung from one edge is the case where the
+              difference shows up.
+            -->
+            <p class="foot">
+              Iterations are how far a correction travels, not how stiff the
+              material is: each sweep moves a constraint fix about one row of the
+              mesh, so the 10k cloth hung from its top edge keeps stretching near
+              the pinned row until it has had enough of them. Watch
+              <code>max stretch</code> and <code>kinetic energy</code> as you drag.
+            </p>
+          </section>
+
+          <section class="panel">
+            <h2 class="panel-title"><span data-icon="network"></span> Graph</h2>
+            <!--
+              The plan's two passes made visible. Islands are what the workgroup
+              mapping is built on and colors are what makes a solve dispatch
+              race-free, and both are computed identically on every tier -- so a
+              number here that differs between tiers is a bug in one of them.
+            -->
+            <dl class="stats">
+              <div><dt>nodes</dt><dd id="gr-nodes">&mdash;</dd></div>
+              <div><dt>constraints</dt><dd id="gr-constraints">&mdash;</dd></div>
+              <div><dt>islands</dt><dd id="gr-islands">&mdash;</dd></div>
+              <div><dt>color batches</dt><dd id="gr-colors">&mdash;</dd></div>
+              <div><dt>node workgroups</dt><dd id="gr-workgroups">&mdash;</dd></div>
+              <div><dt>dispatches / step</dt><dd id="gr-dispatches">&mdash;</dd></div>
+              <div><dt>draw mode</dt><dd id="gr-draw">&mdash;</dd></div>
+              <div><dt>workgroup size</dt><dd id="gr-wgsize">&mdash;</dd></div>
+            </dl>
+          </section>
+
+          <section class="panel">
+            <h2 class="panel-title"><span data-icon="gauge"></span> Counters</h2>
+            <dl class="stats">
+              <div><dt>steps / frames</dt><dd id="st-steps">&mdash;</dd></div>
+              <div><dt>steps per frame</dt><dd id="st-spf">&mdash;</dd></div>
+              <div><dt>ms / frame</dt><dd id="st-ms">&mdash;</dd></div>
+              <div><dt>ms / step</dt><dd id="st-step-ms">&mdash;</dd></div>
+              <div><dt>draw calls</dt><dd id="st-draws">&mdash;</dd></div>
+              <div><dt>triangles</dt><dd id="st-tris">&mdash;</dd></div>
+              <div><dt>escaped</dt><dd id="st-escaped">&mdash;</dd></div>
+              <div>
+                <dt title="Worst |length - rest| / rest over every edge after the sweeps: under 10% the mesh is holding, at 100% an edge has doubled and the lattice is coming apart.">max stretch</dt>
+                <dd id="st-stretch">&mdash;</dd>
+              </div>
+              <div><dt>max speed</dt><dd id="st-speed">&mdash;</dd></div>
+              <div><dt>islands awake</dt><dd id="st-islands">&mdash;</dd></div>
+              <div><dt>kinetic energy</dt><dd id="st-energy">&mdash;</dd></div>
+              <div><dt>digest</dt><dd id="st-digest">&mdash;</dd></div>
+            </dl>
+          </section>
+
+          <section class="panel">
+            <h2 class="panel-title"><span data-icon="terminal"></span> Log</h2>
+            <ul class="report" id="log"></ul>
+          </section>
+
+          <p class="foot">
+            The solver and the renderer share one <code>GPUDevice</code>, and the
+            publish buffer is copied straight into the <code>GPUBuffer</code>
+            three.js already allocated for the position attribute &mdash; no node
+            crosses the bus, and the surface and its wire overlay share that one
+            attribute so a single blit fills both. Constraints are solved in
+            colour batches, never two edges of one colour at once, which is what
+            makes the GPU solve race-free without being bit-reproducible.
+            <code>SoftView</code> never writes the simulation, so replay and
+            training stay independent of this layer;
+            <code>e2e/soft_gpu.spec.ts</code> asserts CPU/GPU parity.
+          </p>
+        </aside>
+      </main>
+    </div>
+    <script type="module" src="./soft.ts"></script>
+  </body>
+</html>
