@@ -222,6 +222,17 @@ describe('the coverage floor is recorded, not tribal knowledge', () => {
       /describe\.skipIf\(underCoverage\)\('Trainer learning'/,
     );
     expect(trainer).toMatch(/underCoverage\s*=\s*process\.env\.COVERAGE/);
+
+    // The soft-body scale spec is the same trade at a smaller size: 60 steps of a
+    // 10k-node cloth is a wall clock over the solver's inner loop, which is what
+    // v8 instrumentation counts, and it adds a scale assertion rather than a line
+    // of coverage -- the passes it walks are the ones the goldens above walk at
+    // counts in the tens. Conditional for the same reason, pinned for the same one.
+    const softCpu = readFileSync(resolve(TESTS, 'soft_cpu.test.ts'), 'utf8');
+    expect(softCpu, 'the scale spec must be skipped conditionally').toMatch(
+      /describe\.skipIf\(underCoverage\)\('scale'/,
+    );
+    expect(softCpu).toMatch(/underCoverage\s*=\s*process\.env\.COVERAGE/);
   });
 
   it('CI runs both the fast suite and the coverage gate', () => {

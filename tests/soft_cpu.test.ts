@@ -758,7 +758,25 @@ describe('publish', () => {
   });
 });
 
-describe('scale', () => {
+/**
+ * The scale test is the expensive one, and it is expensive for the same reason
+ * the trainer's convergence tests are: the property under test is a wall clock
+ * over the solver's inner loop, which is exactly what v8 coverage instrumentation
+ * counts. Measured on this machine, 60 steps of a 10k-node cloth cost 767ms
+ * un-instrumented and 1891ms instrumented in isolation -- and the instrumented
+ * number is not a ceiling on its own, because the run shares the machine with 39
+ * other files. Under a full `test:coverage` run it reaches ~3170ms, over the
+ * 3000ms ceiling below, with no change to the code being measured.
+ *
+ * It also contributes nothing to coverage: the passes it walks are the same ones
+ * the goldens above walk at counts in the tens, so what it adds is a scale
+ * assertion rather than a line. Same trade as `tests/trainer.test.ts`, and safe
+ * for the same reason -- the skip is confined to the coverage script, so
+ * `npm test` still makes the assertion, and CI runs both.
+ */
+const underCoverage = process.env.COVERAGE === '1';
+
+describe.skipIf(underCoverage)('scale', () => {
   it('runs a 10k-node cloth on the reference tier inside a ceiling', () => {
     const sys = createCpuSoftSystem({ mesh: new SoftMesh({ count: 10_000, seed: 1 }) });
     expect(sys.plan).toMatchObject({
@@ -776,7 +794,7 @@ describe('scale', () => {
     expect(sys.mesh.outOfBounds()).toBe(0);
     // A ceiling, not a benchmark. The plan's per-step budget for the reference
     // tier is measured by the soft-body bench, where a slow machine fails on a
-    // number rather than on a wall clock shared with 35 other test files.
+    // number rather than on a wall clock shared with 39 other test files.
     expect(elapsed).toBeLessThan(3000);
   });
 });
