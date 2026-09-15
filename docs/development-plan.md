@@ -30,12 +30,13 @@
 
 仓库已经有一个能跑、能测、能部署的内核：
 
-- 882 个单元测试 + 68 个原生 Rust 测试 + 30 个浏览器测试（`chromium` 与
-  `chromium-webgpu` 两个 project），`npm run verify` 全绿。
+- 1318 个单元测试 + 68 个原生 Rust 测试 + 48 个浏览器测试（`chromium` 与
+  `chromium-webgpu` 两个 project，其中 6 个是「本机没有 WebGPU adapter」时才成立的
+  镜像用例，在有 adapter 的机器上自己跳过），`npm run verify` 全绿。
 - GitHub Actions 五任务四关卡：类型检查与构建、覆盖率、浏览器渲染、Rust 内核与
   wasm 产物校验。
 - Pages 自动部署，线上 demo 可用：训练页、`physics-check`、`shared-device`、
-  `particles`。
+  `particles`、`soft`。
 - 确定性 ECS、固定步长引擎、事件总线。
 - `PhysicsBackend` 抽象，已有 `builtin`、`wasm`（自研 Rust 内核）与 `rapier` 三个实现。
 - `src/gpu/`：运行时能力探测与渲染档位选择（webgpu / webgl2 / cpu）、引用计数的
@@ -43,6 +44,10 @@
 - 粒子层：CPU 参照实现、WebGPU 每步最多六个 dispatch、设备上的实例展开，一次 draw
   call
   喂 three.js；100k 粒子 29.5 ms/步（iGPU，ANGLE/Vulkan，无回读）。
+- 软体/布料层：island 分组 + 约束图着色分批，确定性 CPU 参照与 WebGPU 后端共用同一
+  个 `SoftPlan`，一步是 `5 + iterations × colors` 个 dispatch，publish buffer 直接
+  blit 进 three.js 的位置 attribute；10k 节点布料 4.4–5.3 ms/步、20k 8.2–9.3 ms/步，
+  显存 1.40 / 2.81 MiB（本机，ANGLE/Vulkan，无回读）。
 - 带策略梯度的强化学习器，可在页面内训练。
 - three.js 渲染桥，渲染层不回写仿真状态。
 
@@ -271,6 +276,8 @@
 
 ### M4：GPU 规模物理层
 
+状态：已完成（2026-09-15）。
+
 时间：3–4 周。
 
 任务：
@@ -288,6 +295,80 @@
 - island 并行与约束着色通过确定性对照测试。
 - CPU 层不因 GPU 层引入而变得不可测。
 - WebGL2 回退路径可用，性能目标明确降级。
+
+落地证据：
+
+- 图的两趟与 plan：`src/gpu/softIslands.ts` 是 union-find（路径减半 + 按大小合并），
+  `src/gpu/softColoring.ts` 是升序 first-fit 着色，一个节点一个 u32 掩码，上限
+  `MAX_COLORS = 32`，超过就拒绝而不是悄悄错着色。两趟的结果汇成 `SoftPlan`，而
+  CPU 与 GPU 后端算出来的是同一个 plan —— 「island 并行与约束着色通过确定性对照
+  测试」靠的是 `tests/soft_gpu.test.ts` 里逐字段的 plan 相等断言，不是靠命名。
+- workgroup 映射：`nodeOrder` 按 island 连续排布并补齐到 64 的倍数，
+  `islandOfWorkgroup` 让「这个 island 睡着了吗」变成每个 workgroup 一次 load 而不是
+  每个节点一次。`SOFT_WORKGROUP_SIZE` 恒为 64，全流程不用 subgroup；
+  `tests/soft_islands.test.ts` 钉住补齐量与「一个 workgroup 不跨两个 island」。
+- 竞争与批次：`coloringIsRaceFree` 是可执行的检查，不是注释。一步是
+  `SOFT_FIXED_DISPATCHES(5) + iterations × colors` 个 dispatch，10k 布料在 8 次
+  迭代、8 个 color 下是 69 个，而且这个数字与节点数无关 —— 它随图的最大度数走。
+- 确定性 CPU 参照：`src/gpu/softCpu.ts` 走同一条 padded node order、同一套常量，
+  `deterministic: true`，`digest()` 是 `hex:words`。它不因 GPU 层而变得不可测：
+  `tests/soft_cpu.test.ts` 与 `tests/barrel.test.ts` 都在裸 Node 里跑它（规模那条
+  spec 量的是墙钟，所以在覆盖率运行下条件跳过，这条不对称由 `tests/tdd.test.ts`
+  钉住）。
+- WGSL 由常量生成：`src/gpu/softWgsl.ts` 沿用 M3 的做法，从 CPU 侧拥有的常量生成
+  WGSL，所以数值定义只有一份。`tests/soft_wgsl.test.ts` 钉住 params uniform 的偏移
+  与成员顺序、入口点顺序、batch 表逐字（含 padding）、以及每个 color 对它的
+  offset/size 视图。
+- 这一里程碑最贵的一课：`solve` 的 color 选择器原本读 `global_invocation_id.z`，
+  理由是「dispatch 维度是通往 kernel 的一条免费通道」。它不是。dispatch 的额外维度
+  是并发的而非顺序的：`(x, 1, color + 1)` 会同时跑 `color + 1` 份同一个 kernel，
+  让共享节点的 color 恰好以着色要防的方式竞争，而最后一个 color 永远不会被解。
+  shader 编译通过、dispatch 成功、网格在动，单元测试驱动的是 CPU 参照，所以没有
+  任何容差会报警。抓到它的是真设备上的 CPU/GPU 对照，也就是 `e2e/soft_gpu.spec.ts`
+  存在的理由。现在选择器挂在 binding 上：`batchBuf` 每个 color 独占一个
+  `SOFT_BATCH_STRIDE_BYTES = 256` 的槽位，color `c` 的 bind group 只看得见自己那
+  8 字节，于是 kernel 读 `batchBuf[0u]`，即使 shader 文本写错也索引不到邻居。
+  256 是 `minStorageBufferOffsetAlignment` 的规格默认值，刻意不写进
+  `REQUESTED_LIMITS`：没人请求的 limit 保持默认，而请求它只会让它变小。
+- 渲染不回写，而且这里比 M3 更要紧：粒子的状态是 buffer 里的一行，写坏一个只影响
+  一个物体；软体的状态是图，写一个节点会拉动它的每条边，下一次迭代再去拉那些从没
+  被画过的邻居 —— 一个会回写的渲染器等于按帧率往仿真里注入能量，对照门就变成在
+  比较两次「显示频率不同」的运行。`src/render/soft.ts` 只读，
+  `tests/render_soft.test.ts` 用 digest 钉住这一点。
+- 画法：mesh 而不是实例球。10k 布料是约 20k 三角形、一个 draw call、10k 顶点；
+  10k 个 20 面的实例球是 200k 三角形。position 用普通 `BufferAttribute(itemSize=3)`，
+  三个限定都是承重的：不是 storage attribute（three 会把 itemSize 3 补到 4，而
+  WGSL 的 storage buffer 装不下 `vec3<f32>`，补齐会破坏与 publish buffer 的逐字节
+  对应），不是 `DynamicDrawUsage`（three 每帧重传动态 attribute，会用陈旧的 CPU
+  数组盖掉刚 blit 进去的位置），而 three 的 WebGPU 后端创建顶点 attribute 时带
+  `VERTEX | COPY_SRC | COPY_DST`，这正是 blit 合法的全部理由。`surface` 与 `edges`
+  共用同一个 attribute 对象，所以一次 blit 同时填好面与线框；`edges` 直接拿
+  `constraints.ends` 当线索引，它本来就是 `[a0, b0, a1, b1, ...]`。
+- 规模：`scripts/bench_gpu_soft.mjs` 是 1k/5k/10k/20k 的阶梯。本机三次运行：10k
+  4.4–5.3 ms/步、20k 8.2–9.3 ms/步，即 0.41–0.53 us/节点，两档之间是线性的；1k
+  反而要 4.9–6.8 ms/步，因为那个尺寸下一步的成本是 69 次 dispatch 的提交与队列
+  flush，而不是 1000 个节点的算术。每档 8 个 color、3 个 draw call、escaped 0。
+  `stretch %` 一列在 5k–20k 读到 75–115%，那是收敛诊断而不是关卡：一次
+  Gauss-Seidel 扫描只把修正推进约一行，100×100 的布从顶边挂下来需要上百次扫描，
+  演示页的脚注也是这么写的。
+- 内存预算：`softGpuBudget(plan)` 从 plan 而不是从 mesh 算，因为 plan 是两个后端
+  唯一逐字段同意的对象。1k / 10k / 20k 布料分别是 0.14 / 1.40 / 2.81 MiB，最大
+  单块 buffer（`ends`）是 31 / 313 / 625 KiB。求解器在一个 stage 里绑 15 个
+  storage buffer，而 WebGPU 基线是 8，所以 `assertStorageBuffers` 在分配任何
+  buffer 之前先抛一个带着设备实际数字的 `RangeError`，到 `soft.ts` 就是一次有原因
+  的降级，而不是一个停止渲染的页面。
+- 回退：`webgl2` 与 `cpu` 两档都跑 `softCpu.ts`，档位只决定怎么画。刻意不做
+  transform feedback 的第三个积分器：对照门比较的是两个实现，多一个就多一个没法
+  对照的东西。`demo/soft.html` 支持 `tier=auto|webgpu|webgl2|cpu` 与 `strict=1`；
+  `e2e/soft.spec.ts` 在 SwiftShader 下断言 WebGL2 档「换了渲染器，别的什么都没换」，
+  `e2e/soft_gpu.spec.ts` 在真设备下断言 blit 路径、CPU/GPU 对照、同 seed 两次同
+  字节、以及 10k 节点站得住。假设「本机没有 adapter」的用例在有 adapter 的机器上
+  自己跳过，而不是报告一个这台机器没给出过的档位。
+- 帧率与步长解耦：`SoftRunner.frame(dt)` 走 `FixedClock`，并且时钟丢积压而不是攒
+  积压，所以切走十分钟再回来的标签页不会去补算十分钟的布。
+- 公开面：整条 headless 软体栈从 `src/index.ts` 导出，`render/` 依旧不在 barrel 里；
+  `tests/barrel.test.ts` 为此加了第三条 claim，并且用公共导出跑了一次两遍同摘要的
+  布料回放。
 
 ### M5：AI 与游戏层整合
 
@@ -357,14 +438,16 @@
 
 ## 立即行动
 
-M0 到 M3 已落地，证据见各里程碑下的「落地证据」。接下来按 M4 推进：
+M0 到 M4 已落地，证据见各里程碑下的「落地证据」。M4 的清单全部完成，包括那条从
+M2 拖过来的 `npm run train --backend wasm`。接下来按 M5 推进：
 
-1. 给 `npm run train` 加 `--backend wasm`：这是 M2 遗留项，env 早就接受 `backend`
-   选项，缺的只是脚本入口；补上之后无头训练才能用上这个内核。
-2. island 分组与 workgroup 映射：M4 的第一块，先做一个确定性的 CPU 参照分组器，
-   再把它搬到设备上，顺序与粒子层一致。
-3. 约束图着色分批，避免同一批 dispatch 里的数据竞争；workgroup size 固定 64，
-   不依赖 subgroup。
-4. 软体/布料/质点弹簧的最小 kernel，规模目标 10,000 级。
-5. 性能与内存预算：`scripts/bench_gpu_particles.mjs` 的阶梯形式可以直接复用，
-   M4 需要一份等价的基准与一条 CI 里跑得动的门槛。
+1. ECS 查询与 SoA 布局：批量观测与动作传输要走连续内存，M4 的 `SoftMesh` 与
+   `ParticleField` 已经证明了这条路，缺的是把 env 的观测缓冲接到同一套布局上。
+2. 把 GPU 规模层接进环境与奖励信号，但训练与回放继续走 CPU 确定性路径 ——
+   `GpuSoftSystem.deterministic` 是 false，这条不是偏好而是约束。
+3. 「同一策略在训练与浏览器演示中表现一致」需要一条可执行的断言，而不是一句承诺：
+   headless 训练出的 policy JSON 已经记录 backend 与 seed，演示页要能加载它并复现
+   同一条轨迹。
+4. 策略推理路径：先 CPU/wasm，GPU 推理留到 M5 之后再评估。
+5. 训练、回放、可视化的统一 API。粒子与软体两层现在各自有 `*Runner` 与
+   `create*System`，形状是一样的，M5 是把这个形状收成一份接口的时机。

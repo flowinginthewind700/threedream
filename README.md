@@ -5,35 +5,67 @@ fixed-timestep simulation loop, a pluggable physics layer, and a reinforcement
 learner that trains live in the page. Rendering is three.js. The simulation core
 is plain TypeScript and needs no browser and no GPU; a Rust/wasm kernel
 implements the same solver bit for bit, for the runs where speed matters.
-On top of that sits a WebGPU particle layer: up to six compute dispatches a step,
-on a device three.js is already using, and an instance buffer expanded on the GPU
-and blitted straight into the renderer, so a frame costs one draw call and no
-readback. 100,000 particles run at 29.5 ms/step on an iGPU.
+On top of that sits a WebGPU scale layer: a particle system at up to six compute
+dispatches a step, and a soft-body solver that colors the constraint graph so no
+two edges in one dispatch share a node. Both run on a device three.js is already
+using, and both blit their output straight into a buffer the renderer allocated,
+so a frame costs a few draw calls and no readback. On an iGPU: 100,000 particles
+at 29.5 ms/step, a 10,000-node cloth at 4.4-5.3 ms/step and 20,000 nodes at
+8.2-9.3.
 
 一个跑在浏览器里的游戏与物理-AI 内核：确定性 ECS + 固定步长仿真循环、可插拔的物理
 层，以及在页面里实时训练的强化学习器。渲染用 three.js。仿真核心是纯 TypeScript，不
 依赖浏览器和 GPU；Rust/wasm 内核逐位实现同一个求解器，用在需要速度的场合。
-在这之上是一层 WebGPU 粒子：每步最多六次 compute dispatch，跑在 three.js 已经在用的
-设备上；实例矩阵在 GPU 上展开后直接 blit 进渲染器，所以一帧只有一个 draw call、没有
-回读。iGPU 上 10 万粒子 29.5 ms/步。
+在这之上是一层 WebGPU 规模层：粒子系统每步最多六次 compute dispatch；软体求解器给
+约束图着色，于是同一批 dispatch 里不会有两条边共用一个节点。两者都跑在 three.js
+已经在用的设备上，也都把输出直接 blit 进渲染器自己分配好的 buffer，所以一帧只有几个
+draw call、没有回读。iGPU 上：10 万粒子 29.5 ms/步，1 万节点布料 4.4–5.3 ms/步，
+2 万节点 8.2–9.3 ms/步。
 
 [![CI](https://github.com/flowinginthewind700/threedream/actions/workflows/ci.yml/badge.svg)](https://github.com/flowinginthewind700/threedream/actions/workflows/ci.yml)
 
 ![the demo, mid-training](docs/demo-drive.jpg)
 
-Live demo: <https://flowinginthewind700.github.io/threedream/>, deployed from
-`main` automatically once every gate in CI is green.
+## Demos
 
-在线演示：<https://flowinginthewind700.github.io/threedream/>，`main` 上所有 CI 关卡
-通过后自动部署。
+Five pages, deployed from `main` automatically once every gate in CI is green.
+Each one exists to measure a claim rather than to illustrate it: the numbers in
+the sidebars are read off the running engine.
+
+| Page | Live | What it measures |
+|---|---|---|
+| Trainer | [threedream/](https://flowinginthewind700.github.io/threedream/) | A policy-gradient learner training in the page, on `DriveEnv` and `ReachEnv`. |
+| Physics check | [physics-check.html](https://flowinginthewind700.github.io/threedream/physics-check.html) | One canonical scene through `builtin`, `wasm` and a wasm replay, digests compared in your own browser. |
+| Shared device | [shared-device.html](https://flowinginthewind700.github.io/threedream/shared-device.html) | A single `GPUDevice` backing three.js rendering and a raw WGSL compute pipeline at the same time. |
+| Particles | [particles.html](https://flowinginthewind700.github.io/threedream/particles.html) | 1k-100k particles: which tier the browser gave you, blit or CPU upload, draw calls, hash overflow. |
+| Soft bodies | [soft.html](https://flowinginthewind700.github.io/threedream/soft.html) | Cloth / sheets / cube / rope up to 20k nodes: islands, color batches, dispatches a step, the race-free flag, max stretch. |
+
+Locally, `npm run dev` serves the same five at `http://localhost:5173/` and
+`http://localhost:5173/{page}.html`.
+
+## 演示页
+
+一共五个页面，`main` 上所有 CI 关卡通过后自动部署。每个页面存在的理由都是把一条结论
+量出来，而不是画个示意：侧栏里的数字都是从正在运行的引擎里读出来的。
+
+| 页面 | 线上 | 量的是什么 |
+|---|---|---|
+| 训练页 | [threedream/](https://flowinginthewind700.github.io/threedream/) | 在页面里实时训练的策略梯度学习器，任务是 `DriveEnv` 与 `ReachEnv`。 |
+| 确定性检查 | [physics-check.html](https://flowinginthewind700.github.io/threedream/physics-check.html) | 同一个规范场景跑 `builtin`、`wasm` 与一次 wasm 回放，在你自己的浏览器里比对摘要。 |
+| 共享设备 | [shared-device.html](https://flowinginthewind700.github.io/threedream/shared-device.html) | 同一个 `GPUDevice` 同时支撑 three.js 渲染与一条裸 WGSL compute pipeline。 |
+| 粒子 | [particles.html](https://flowinginthewind700.github.io/threedream/particles.html) | 1k–100k 粒子：浏览器实际给了哪个档位、走 blit 还是 CPU 上传、draw call 数、哈希溢出数。 |
+| 软体 | [soft.html](https://flowinginthewind700.github.io/threedream/soft.html) | 布料 / 多片布 / 立方体 / 绳，最多 2 万节点：island 数、着色批次数、每步 dispatch 数、无竞争标志、最大拉伸。 |
+
+本地 `npm run dev` 提供同样五个页面：`http://localhost:5173/` 与
+`http://localhost:5173/{page}.html`。
 
 ## Quickstart
 
 ```bash
 npm install
-npm run dev       # browser demo on http://localhost:5173
+npm run dev       # the five browser demos on http://localhost:5173
 npm run train     # headless training in Node, prints a progress trace
-npm test          # 882 unit tests, ~23s
+npm test          # 1318 unit tests, ~22s
 npm run verify    # typecheck + test + build
 ```
 
@@ -57,27 +89,32 @@ on the sparkline, then flip **Playback** from `Random` to `Learned` to see what 
 learned. The viewport badge tracks how many episodes the current policy has behind
 it. **Reach** is the harder of the two tasks.
 
-Three more pages ship beside the trainer. `/physics-check.html` runs one
-canonical scene through `builtin`, `wasm` and a wasm replay in your own browser
-and compares the digests. `/shared-device.html` proves that a single `GPUDevice`
-can back three.js rendering and a raw WGSL compute pipeline at the same time,
-which is the assumption the whole GPU roadmap rests on. `/particles.html` is the
-M3 demo: pick a tier (`auto`, `webgpu`, `webgl2`, `cpu`), a particle count and a
-seed, and the sidebar reports the tier it actually landed on, whether the frame
-went through the GPU blit or a CPU upload, and the draw-call count — the claims
-are measured on the page rather than asserted in prose.
+The two scale pages are the ones with pickers. `/particles.html` takes a tier
+(`auto`, `webgpu`, `webgl2`, `cpu`), a count and a seed, and reports the tier it
+actually landed on, whether the frame went through the GPU blit or a CPU upload,
+the draw-call count, and how many particles failed to fit an already-full hash
+bucket this step. `/soft.html` takes the same tier picker plus a scene (cloth,
+sheets, cube, rope), a node count up to 20k, solver iterations and stiffness, and
+reports the plan the two graph passes produced — islands, color batches, node
+workgroups, dispatches a step — beside the backend's own `raceFree` flag and the
+worst constraint stretch on screen. Iterations buy *reach*, not stiffness: a
+correction travels about one row of the mesh per sweep, so a 10k cloth hung from
+its top edge keeps stretching near the pinned row until it has had enough of
+them, and the page says so in as many words.
 
 演示页里直接训练。点 **Train**，看火花线上 mean episode return 上升，再把
 **Playback** 从 `Random` 切到 `Learned`，就能看到它学到了什么。视口角标记录当前策略
 背后有多少 episode。**Reach** 是两个任务里更难的那个。
 
-训练页旁边还有三个页面。`/physics-check.html` 在你自己的浏览器里用 `builtin`、
-`wasm` 和一次 wasm 回放跑同一个规范场景，并比对摘要。`/shared-device.html` 证明
-同一个 `GPUDevice` 可以同时支撑 three.js 渲染与一条裸 WGSL compute pipeline，
-这正是整条 GPU 路线图所依赖的前提。`/particles.html` 是 M3 的演示页：选档位
-（`auto`、`webgpu`、`webgl2`、`cpu`）、粒子数与随机种子，侧栏会报告它实际落在哪个
-档位、这一帧走的是 GPU blit 还是 CPU 上传、以及 draw call 数 —— 这些结论是在页面上
-量出来的，不是写在文档里的。
+两个规模页面是可以动手选的那两个。`/particles.html` 选档位（`auto`、`webgpu`、
+`webgl2`、`cpu`）、粒子数与随机种子，报告它实际落在哪个档位、这一帧走的是 GPU blit
+还是 CPU 上传、draw call 数，以及这一步有多少粒子没能挤进一个已经满了的哈希桶。
+`/soft.html` 除了同一个档位选择器，还选场景（布料、多片布、立方体、绳）、最多 2 万个
+节点、求解迭代次数与刚度，并把两趟图分析的产物 —— island 数、着色批次数、节点
+workgroup 数、每步 dispatch 数 —— 连同后端自己的 `raceFree` 标志和屏幕上最坏的约束
+拉伸一起报出来。迭代次数买的是**传播距离**，不是刚度：一次扫描只把修正推进大约一行，
+所以从顶边挂下来的 1 万节点布料，在拿到足够多次扫描之前会一直在固定行附近拉伸，页面
+上原话写着这件事。
 
 ## Why it is shaped this way
 
@@ -90,8 +127,11 @@ Two rules drive the design:
 2. **Everything that matters is deterministic.** A seeded RNG, a fixed timestep,
    and no hidden global state mean `engine.step(n)` in Node and `engine.frame(dt)`
    in a browser produce the same simulation. That is what makes a physics-AI
-   kernel testable: all 882 unit tests run without a GPU, and the wasm backend is
-   held to the bits of the TypeScript solver it ports.
+   kernel testable: all 1318 unit tests run without a GPU, and the wasm backend is
+   held to the bits of the TypeScript solver it ports. The two GPU layers are held
+   to a CPU reference the same way, and neither claims determinism for itself:
+   `deterministic` is false on both backends, because atomics promise no order, so
+   training and replay always run on the reference tier.
 
 两条规则决定了整体设计：
 
@@ -99,18 +139,20 @@ Two rules drive the design:
    于是同一个场景既能无头训练，也能在浏览器里渲染游玩，结果完全一致。
 2. **关键路径都是确定性的。** 带种子的 RNG、固定步长、没有隐藏的全局状态，所以 Node
    里的 `engine.step(n)` 与浏览器里的 `engine.frame(dt)` 跑的是同一个仿真。这让一个
-   物理-AI 内核变得可测：882 个单元测试全都不需要 GPU，而 wasm 后端要对齐它所移植的 TS
-   求解器的每一个比特。
+   物理-AI 内核变得可测：1318 个单元测试全都不需要 GPU，而 wasm 后端要对齐它所移植的
+   TS 求解器的每一个比特。两个 GPU 层用同样的方式对齐一份 CPU 参照，而且都不替自己
+   声称确定性：两个后端的 `deterministic` 都是 false，因为原子操作不承诺顺序，所以
+   训练与回放永远走参照档。
 
 ## Layers
 
 ```
 core     clock / ECS / events / engine facade     no three.js, no WASM
 physics  backend interface + three solvers        no three.js
-gpu      probe, shared device, particle layer     no three.js, no WASM
+gpu      probe, shared device, scale layers       no three.js, no WASM
 ai       MLP, Gaussian policy, policy-gradient    no three.js, no WASM
 envs     learning tasks (drive, reach)            physics only
-render   three.js bridge + particle view          the only layer importing three
+render   three.js bridge + particle/soft views    the only layer importing three
 ```
 
 `src/index.ts` re-exports everything **except** `render`. Importing the barrel
@@ -126,9 +168,10 @@ arguments and returns `webgpu`, `webgl2` or `cpu`. Nothing in it reads
 `import.meta.env`, so the fallback cannot be baked in at compile time.
 The same layer owns the shared `GPUDevice` (`device.ts`, refcounted, with a
 recovery path for device loss), the wrapper that lets external WGSL bind
-three.js's own buffers (`compute.ts`), and the particle simulation — a CPU
-reference implementation beside the GPU one, so the WGSL can be checked against
-numbers rather than against a screenshot.
+three.js's own buffers (`compute.ts`), and the two scale layers — particles and
+soft bodies. Each of those has a CPU reference implementation beside the GPU
+one, so the WGSL can be checked against numbers rather than against a
+screenshot.
 
 `src/index.ts` 重导出**除** `render` **之外**的全部内容。引入这个入口不能把 three.js
 带进训练脚本，所以浏览器代码直接引 `ThreeRenderer`。这是刻意的约束，不是遗漏。两个
@@ -139,8 +182,97 @@ WASM 后端**在**这个入口里，引入它们依然不花代价：各自的�
 `selectRenderTier` 接收 adapter 探测结果作为参数，返回 `webgpu`、`webgl2` 或
 `cpu`。它内部不读 `import.meta.env`，所以回退路径不可能在编译期被写死。
 这一层同时持有共享的 `GPUDevice`（`device.ts`，引用计数，带设备丢失后的恢复路径）、
-让外部 WGSL 直接绑定 three.js 自己那些 buffer 的封装（`compute.ts`），以及粒子仿真
-—— CPU 参照实现与 GPU 实现并排放着，所以 WGSL 要对齐的是一组数字，而不是一张截图。
+让外部 WGSL 直接绑定 three.js 自己那些 buffer 的封装（`compute.ts`），以及那两层规模层
+—— 粒子与软体。两者都在 GPU 实现旁边放着一份 CPU 参照实现，所以 WGSL 要对齐的是一组
+数字，而不是一张截图。
+
+### The scale layers
+
+Neither GPU layer is a fast path with a CPU stub. `particleCpu.ts` sits beside
+`particleGpu.ts` and `softCpu.ts` beside `softGpu.ts`, each pair sharing one
+layout module and one set of constants, and the soft pair its uniform packer
+too, so the WGSL is asserted against numbers. `deterministic` is false on both
+GPU backends: atomics promise no order and a driver may contract `a * b + c`
+into an fma, so training and replay stay on the reference tier. What the
+soft-body layer can claim instead is `raceFree`, and getting there took two
+graph passes.
+
+两个 GPU 层都不是「快路径配一个 CPU 桩」。`particleCpu.ts` 与 `particleGpu.ts` 并排，
+`softCpu.ts` 与 `softGpu.ts` 并排，每对读的是同一个 layout 模块与同一套常量（软体那对
+还共用同一个 uniform 打包器），于是 WGSL 要对齐的是一组数字。两个 GPU 后端的
+`deterministic` 都是 false：原子操作不承诺顺序，驱动也可能把 `a * b + c` 收缩成 fma，
+所以训练与回放留在参照档。软体层能声称的是 `raceFree`，而为了它多出了两趟图计算。
+
+`softIslands.ts` is a union-find that also emits the node order the kernels
+dispatch against: each island's nodes consecutively, padded out to a multiple of
+the 64-lane workgroup, so "is this island asleep" costs one load per workgroup
+rather than one per node. `softColoring.ts` then colors the constraint graph
+first-fit in ascending edge order — one u32 mask per node, `MAX_COLORS = 32`,
+and a graph that would need more is refused rather than silently mis-colored. A
+color is a set of constraints that share no node, so every write inside one
+batch lands on a distinct node and the whole solve is race-free without a single
+atomic. Both passes run identically on the two tiers, and `tests/soft_gpu.test.ts`
+asserts the resulting `SoftPlan` field for field — that equality, not the naming,
+is what "island grouping and constraint coloring pass a determinism check"
+means.
+
+`softIslands.ts` 是 union-find，同时产出 kernel 实际 dispatch 用的节点顺序：每个
+island 的节点连续排布，并补齐到 64 lane workgroup 的倍数，于是「这个 island 睡着了
+吗」是每个 workgroup 一次 load，而不是每个节点一次。`softColoring.ts` 再按边的升序做
+first-fit 着色 —— 一个节点一个 u32 掩码，上限 `MAX_COLORS = 32`，需要更多颜色的图会被
+拒绝，而不是被悄悄错着色。一个 color 是一组互不共享节点的约束，所以同一批里的每次写入
+都落在不同节点上，整个求解无竞争，而且不用一个原子操作。两趟在两档上的算法完全相同，
+`tests/soft_gpu.test.ts` 逐字段断言产出的 `SoftPlan` —— 「island 分组与约束着色通过
+确定性对照」说的是这个相等，不是命名。
+
+A step is `5 + iterations * colors` dispatches: 69 for a cloth at 8 iterations
+and 8 colors, a number that follows the graph's maximum degree and not the node
+count. `publish` writes into a buffer three.js already allocated, and
+`render/soft.ts` blits it straight into the mesh's position attribute — a plain
+`BufferAttribute(itemSize=3)`, neither a storage attribute nor
+`DynamicDrawUsage`, because the first would break the byte-for-byte
+correspondence and the second would overwrite it with a stale CPU array every
+frame. 10k nodes cost 1.40 MiB and 4.4-5.3 ms/step, 20k cost 2.81 MiB and
+8.2-9.3 ms/step, and 1k costs about what 10k does: the dispatch count does not
+depend on the node count, so at the bottom of the ladder a step is 69
+submissions and a queue flush rather than 1000 nodes of arithmetic. Those are
+the numbers `scripts/bench_gpu_soft.mjs` exists to print, and they are a floor
+— headless Chromium hands `requestAdapter()` whichever GPU the driver stack
+prefers, which on a laptop with no Vulkan ICD for the discrete card is the
+integrated one.
+
+一步是 `5 + iterations * colors` 个 dispatch：8 次迭代、8 个 color 的布料是 69 个，
+这个数字跟着图的最大度数走，不跟节点数走。`publish` 写进 three.js 已经分配好的那块
+buffer，`render/soft.ts` 把它直接 blit 进 mesh 的 position attribute —— 普通的
+`BufferAttribute(itemSize=3)`，既不是 storage attribute 也不是 `DynamicDrawUsage`，
+因为前者会破坏逐字节对应，后者会每帧用陈旧的 CPU 数组把刚 blit 进去的位置盖掉。
+1 万节点 1.40 MiB、4.4–5.3 ms/步，2 万节点 2.81 MiB、8.2–9.3 ms/步，而 1k 每步的开销与
+10k 相当：dispatch 数不随节点数变化，所以阶梯底部的一步是 69 次提交加一次队列 flush，
+而不是 1000 个节点的算术。这些正是 `scripts/bench_gpu_soft.mjs` 要打印的数字，而且它
+是一个下限 —— 无头 Chromium 会把 `requestAdapter()` 交给驱动栈偏好的那块 GPU，在一台
+独显没有 Vulkan ICD 的笔记本上，那就是集显。
+
+The most expensive lesson in the layer is one the unit tests could not catch.
+The color selector originally read `global_invocation_id.z`, on the theory that
+a dispatch dimension is a free channel into the kernel. It is not: dispatch
+dimensions are concurrent rather than sequential, so `(x, 1, color + 1)` runs
+every color at once and re-creates exactly the race the coloring exists to
+remove, while the last color never solves at all. The shader compiled, the
+dispatches succeeded, the mesh moved, and the unit tests drive the CPU
+reference, so no tolerance ever complained. What caught it was a CPU/GPU
+comparison on a real device, which is why `e2e/soft_gpu.spec.ts` exists. The
+selector now hangs off a binding: each color owns one 256-byte slot of
+`batchBuf` and sees only its own 8 bytes, so the kernel reads `batchBuf[0u]` and
+cannot index a neighbour's slot even if the shader text is wrong.
+
+这一层最贵的一课，单元测试抓不到。color 选择器原本读 `global_invocation_id.z`，理由是
+「dispatch 维度是通往 kernel 的一条免费通道」。它不是：dispatch 的维度是并发的，不是
+顺序的，于是 `(x, 1, color + 1)` 会同时跑所有 color，把着色本该消除的那个竞争原样重建
+出来，而最后一个 color 根本不会被解。shader 编译通过、dispatch 成功、网格在动，单元
+测试驱动的是 CPU 参照，所以没有任何容差会报警。抓到它的是真设备上的一次 CPU/GPU 对照
+—— 这正是 `e2e/soft_gpu.spec.ts` 存在的理由。现在选择器挂在 binding 上：每个 color
+独占 `batchBuf` 里一个 256 字节的槽位，只看得见自己那 8 字节，于是 kernel 读
+`batchBuf[0u]`，即使 shader 文本写错也索引不到邻居的槽位。
 
 ### Physics backends
 
@@ -273,30 +405,33 @@ and `tests/tdd.test.ts` fails the build the moment a new module lands without on
 
 | Command | What it runs | Cost |
 |---|---|---|
-| `npm test` | 882 unit tests, headless, no GPU needed | ~23s |
-| `npm run test:coverage` | same suite under v8, floor enforced by `vitest.config.ts` | ~35s |
-| `npm run test:e2e` | 30 Playwright tests over 5 specs, two projects: SwiftShader WebGL2 and ANGLE/Vulkan WebGPU | ~60s |
+| `npm test` | 1318 unit tests, headless, no GPU needed | ~22s |
+| `npm run test:coverage` | same suite under v8, floor enforced by `vitest.config.ts` | ~21s |
+| `npm run test:e2e` | 48 Playwright tests over 7 specs, two projects: SwiftShader WebGL2 and ANGLE/Vulkan WebGPU | ~50s |
 | `npm run test:rust` | 68 native Rust tests for the solver | ~1s warm |
 | `npm run check:wasm` | 35 assertions over the committed `wasm/pkg`: ABI, provenance, behaviour | ~1s |
-| `node scripts/bench_gpu_particles.mjs` | the M3 ladder: per-step cost and draw calls at 1k/10k/50k/100k on a real device | ~10s |
+| `node scripts/bench_gpu_particles.mjs` | the M3 ladder: per-step cost and draw calls at 1k/10k/50k/100k on a real device | ~2s |
+| `node scripts/bench_gpu_soft.mjs` | the M4 ladder: per-step cost, dispatches, colors and blit size at 1k/5k/10k/20k nodes | ~2s |
 
 The two e2e projects exist because the pages need two different GPUs. `demo`,
-`physics-check` and `particles` only need *a* GL context, and headless Chromium
-has none, so they run on SwiftShader: that the render layer works without
-hardware is the property worth testing. `shared-device` and the GPU half of
-`particles` need a real `GPUDevice`, which means ANGLE's Vulkan backend with the
-WebGPU service enabled. Same browser, different flags, and a flag set that works
-for one silently downgrades the other. The four tests that assume *no* adapter
-skip themselves on a machine that has one, rather than reporting a tier the
-machine did not produce.
+`physics-check`, `particles` and `soft` only need *a* GL context, and headless
+Chromium has none, so they run on SwiftShader: that the render layer works
+without hardware is the property worth testing. `shared-device` and the GPU
+halves of `particles` and `soft` need a real `GPUDevice`, which means ANGLE's
+Vulkan backend with the WebGPU service enabled. Same browser, different flags,
+and a flag set that works for one silently downgrades the other. The six tests
+that assume *no* adapter skip themselves on a machine that has one, rather than
+reporting a tier the machine did not produce.
 
 Coverage is a separate command, not a flag on `npm test`: instrumenting the
 training inner loop costs ~10x wall time, and folding that into the fast loop
 would destroy the red/green cadence the tests exist to provide. So the coverage
 run skips the two convergence tests (`COVERAGE=1`, `tests/trainer.test.ts`) that
-cost 180s of the 185s and contribute ~0.3% of branch coverage — `npm test` still
-runs them, and `tests/tdd.test.ts` pins that asymmetry. The floor sits a few
-points under what the suite actually measures (93/82 against 98/92), which is
+cost 180s of the 185s and contribute ~0.3% of branch coverage, plus the one
+soft-body scale spec (`tests/soft_cpu.test.ts`) whose assertion is a wall clock
+that instrumented code cannot meet — `npm test` still runs all three, and
+`tests/tdd.test.ts` pins that asymmetry. The floor sits a few points under what
+the suite actually measures (93/82/93/94 against 98.7/93.5/98.9/99.1), which is
 the part that matters — a threshold set far below current reality is decoration,
 while one set at it makes every refactor a fight.
 
@@ -325,9 +460,10 @@ determinism claim rests on.
 覆盖率是独立命令而非 `npm test` 的参数：给训练内层循环插桩会让墙钟时间涨约 10 倍，
 把它塞进快速循环会毁掉测试本该提供的红/绿节奏。因此覆盖率运行会跳过那两个收敛测试
 （`COVERAGE=1`，`tests/trainer.test.ts`）—— 它们占了 185s 里的 180s，却只贡献约 0.3%
-的分支覆盖率；`npm test` 照跑不误，这条不对称由 `tests/tdd.test.ts` 钉死。
-下限压在实测值之下几个点（实测 98 / 92，下限 93 / 82）—— 这才是关键：远低于现状的
-阈值只是装饰，而贴着现状设阈值则会让每次重构都变成搏斗。
+的分支覆盖率 —— 外加软体那一条规模 spec（`tests/soft_cpu.test.ts`），它断言的是一个
+插桩后的代码无法满足的墙钟；`npm test` 三条照跑，这条不对称由 `tests/tdd.test.ts` 钉死。
+下限压在实测值之下几个点（实测 98.7 / 93.5 / 98.9 / 99.1，下限 93 / 82 / 93 / 94）——
+这才是关键：远低于现状的阈值只是装饰，而贴着现状设阈值则会让每次重构都变成搏斗。
 
 `.github/workflows/ci.yml` 是单文件五任务：`verify`（类型检查 + 测试 + 构建）、
 `coverage`、`e2e`、`rust` 四个关卡并行，`deploy` 依赖这四者。单独的 `pages.yml` 会在关卡变红时
@@ -377,21 +513,22 @@ Nothing in `src/`, `tests/` or the demo depends on it, so a plain
 ## Layout
 
 ```
-src/core/      clock.ts ecs.ts engine.ts events.ts rng.ts
+src/core/      clock.ts digest.ts ecs.ts engine.ts events.ts rng.ts
 src/physics/   types.ts builtin.ts wasm.ts rapier.ts reference.ts components.ts
-src/gpu/       capabilities.ts device.ts compute.ts particle*.ts
+src/gpu/       capabilities.ts device.ts compute.ts particle*.ts soft*.ts
 src/ai/        mlp.ts policy.ts trainer.ts baseline.ts
 src/envs/      types.ts drive.ts reach.ts
-src/render/    scene.ts particles.ts
+src/render/    scene.ts particles.ts soft.ts
 rust/          physics (solver) / physics-wasm (ABI) / gpu (wgpu skeleton)
 wasm/pkg/      committed wasm-pack output, rebuilt by `npm run build:wasm`
 scripts/       train_headless.ts check_wasm_artifact.mjs bench_*.mjs
                audit_unreal_reference.mjs clone_unreal_reference.sh
 docs/          feasibility study, development plan, demo assets
-demo/          index (trainer), physics-check, shared-device, particles: .html + .ts
-tests/         31 files, 882 tests
-e2e/           demo, wasm physics, particles (WebGL); shared device and the GPU
-               half of particles (WebGPU)
+demo/          index (trainer), physics-check, shared-device, particles, soft:
+               each one a .html + .ts pair
+tests/         40 files, 1318 tests
+e2e/           demo, wasm physics, particles, soft (WebGL); shared device and
+               the GPU halves of particles and soft (WebGPU)
 .github/       ci.yml: four gates (verify / coverage / e2e / rust) then Pages deploy
 thirdparty/    UnrealEngine (submodule, opt-in)
 ```
