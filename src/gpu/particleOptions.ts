@@ -5,7 +5,7 @@
  * options, and the cheapest way to guarantee that is to have exactly one place
  * resolve them and exactly one place pack them. So this module owns both: the
  * CPU sim reads the resolved struct field by field, and the GPU sim uploads the
- * same struct as a 64-byte uniform that `particleWgsl.ts` declares as `Params`.
+ * same struct as a 96-byte uniform that `particleWgsl.ts` declares as `Params`.
  * A test pins the two against each other, which is what stops a WGSL struct from
  * drifting three fields out of alignment -- the failure mode where the shader
  * compiles, runs, and quietly uses `dt` as the restitution.
@@ -14,6 +14,7 @@
 import {
   PARTICLE_STRIDE,
   boundsSize,
+  type Bounds,
   type ParticleField,
   type Vec3Tuple,
 } from './particleField.js';
@@ -51,34 +52,50 @@ export const BOUNDS_MODE_BITS: Readonly<Record<BoundsMode, number>> = {
   none: 2,
 };
 
-/** Uniform size in floats. 16 f32 = 64 bytes, which is `sizeOf(Params)` in WGSL. */
-export const PARAMS_FLOATS = 16;
+/**
+ * Uniform size in floats. 24 f32 = 96 bytes, which is `sizeOf(Params)` in WGSL.
+ *
+ * The layout is not free: WGSL gives `vec3<f32>` an alignment of 16 bytes, so the
+ * three vectors below each start on a word that is a multiple of four and every
+ * scalar that follows fills the fourth word of its group. Packing it this way
+ * keeps the struct at 96 bytes with no interior padding the CPU has to know
+ * about, and `particleWgsl.ts` declares the members in this exact order.
+ */
+export const PARAMS_FLOATS = 24;
 export const PARAMS_BYTES = PARAMS_FLOATS * 4;
 
 /**
  * Offsets into the uniform, in 4-byte words.
  *
- * Words 0-11 are f32, words 12-15 are u32: a WGSL struct mixes them freely, and
- * keeping the integers in the tail means the float half is one contiguous run
- * that `writeParams` can fill without a DataView.
+ * Words 0-19 are f32, words 20-23 are u32. Keeping the integers in the tail means
+ * the float half is one contiguous run that `writeParams` can fill without a
+ * DataView, and it leaves the two pad words visible rather than implicit.
  */
 export const PARAM_WORD = {
   gravityX: 0,
   gravityY: 1,
   gravityZ: 2,
   damping: 3,
-  restitution: 4,
-  maxSpeed: 5,
-  dt: 6,
-  nbodyStrength: 7,
-  softening: 8,
-  cutoffSquared: 9,
-  cellSize: 10,
-  invCell: 11,
-  count: 12,
-  tableMask: 13,
-  bucketCapacity: 14,
-  flags: 15,
+  boundsMinX: 4,
+  boundsMinY: 5,
+  boundsMinZ: 6,
+  restitution: 7,
+  boundsMaxX: 8,
+  boundsMaxY: 9,
+  boundsMaxZ: 10,
+  maxSpeed: 11,
+  dt: 12,
+  nbodyStrength: 13,
+  softening: 14,
+  cutoffSquared: 15,
+  cellSize: 16,
+  invCell: 17,
+  padA: 18,
+  padB: 19,
+  count: 20,
+  tableMask: 21,
+  bucketCapacity: 22,
+  flags: 23,
 } as const;
 
 function finite(name: string, value: number, min: number, max: number): number {
@@ -177,6 +194,12 @@ export interface ParamsFrame {
   tableSize: number;
   bucketCapacity: number;
   count: number;
+  /**
+   * The box the bounds kernels clamp against, and also the hash origin: the CPU
+   * broadphase measures cell coordinates from `bounds.min`, so the shader has to
+   * be given the same origin or the two disagree about every cell.
+   */
+  bounds: Bounds;
 }
 
 /**
@@ -196,13 +219,20 @@ export function writeParams(
   if ((frame.tableSize & (frame.tableSize - 1)) !== 0 || frame.tableSize <= 0) {
     throw new RangeError(`tableSize must be a power of two, got ${frame.tableSize}`);
   }
-  const floats = new Float32Array(out, 0, 12);
-  const ints = new Uint32Array(out, 12 * 4, 4);
+  const floats = new Float32Array(out, 0, 20);
+  const ints = new Uint32Array(out, 20 * 4, 4);
+  floats.fill(0);
   floats[PARAM_WORD.gravityX] = resolved.gravity[0];
   floats[PARAM_WORD.gravityY] = resolved.gravity[1];
   floats[PARAM_WORD.gravityZ] = resolved.gravity[2];
   floats[PARAM_WORD.damping] = resolved.damping;
+  floats[PARAM_WORD.boundsMinX] = frame.bounds.min[0];
+  floats[PARAM_WORD.boundsMinY] = frame.bounds.min[1];
+  floats[PARAM_WORD.boundsMinZ] = frame.bounds.min[2];
   floats[PARAM_WORD.restitution] = resolved.restitution;
+  floats[PARAM_WORD.boundsMaxX] = frame.bounds.max[0];
+  floats[PARAM_WORD.boundsMaxY] = frame.bounds.max[1];
+  floats[PARAM_WORD.boundsMaxZ] = frame.bounds.max[2];
   floats[PARAM_WORD.maxSpeed] = resolved.maxSpeed;
   floats[PARAM_WORD.dt] = frame.dt;
   floats[PARAM_WORD.nbodyStrength] = resolved.nbodyStrength;

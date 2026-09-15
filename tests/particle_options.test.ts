@@ -28,6 +28,9 @@ import type { BoundsMode } from '../src/gpu/particleTypes.js';
 const field = (count = 64, radius: readonly [number, number] = [0.05, 0.1]): ParticleField =>
   new ParticleField({ count, scene: 'grid', radius });
 
+/** A frame whose bounds match the field the tests build, so the two agree. */
+const BOUNDS = { min: [-8, -8, -8] as const, max: [8, 8, 8] as const };
+
 describe('resolveParticleOptions', () => {
   it('fills every default', () => {
     expect(resolveParticleOptions()).toEqual(DEFAULT_PARTICLE_OPTIONS);
@@ -154,21 +157,37 @@ describe('assertFieldFits', () => {
 });
 
 describe('the uniform layout', () => {
-  it('is 16 floats / 64 bytes, and the word offsets are all distinct', () => {
-    expect(PARAMS_FLOATS).toBe(16);
-    expect(PARAMS_BYTES).toBe(64);
+  it('is 24 floats / 96 bytes, and the word offsets are all distinct', () => {
+    expect(PARAMS_FLOATS).toBe(24);
+    expect(PARAMS_BYTES).toBe(96);
+    // WGSL rounds a struct's size up to its alignment, which is 16 for vec3.
+    expect(PARAMS_BYTES % 16).toBe(0);
     const words = Object.values(PARAM_WORD);
     expect(new Set(words).size).toBe(words.length);
     expect(Math.max(...words)).toBe(PARAMS_FLOATS - 1);
     expect(Math.min(...words)).toBe(0);
   });
 
-  it('puts the twelve f32 words first and the four u32 words last', () => {
+  it('puts the twenty f32 words first and the four u32 words last', () => {
     const intWords = ['count', 'tableMask', 'bucketCapacity', 'flags'] as const;
-    for (const name of intWords) expect(PARAM_WORD[name]).toBeGreaterThanOrEqual(12);
+    for (const name of intWords) expect(PARAM_WORD[name]).toBeGreaterThanOrEqual(20);
     for (const [name, word] of Object.entries(PARAM_WORD)) {
-      if (!(intWords as readonly string[]).includes(name)) expect(word).toBeLessThan(12);
+      if (!(intWords as readonly string[]).includes(name)) expect(word).toBeLessThan(20);
     }
+  });
+
+  it('starts every vec3 on a 16-byte boundary, as WGSL alignment requires', () => {
+    for (const vector of ['gravity', 'boundsMin', 'boundsMax'] as const) {
+      const x = PARAM_WORD[`${vector}X`] as number;
+      expect(x % 4, `${vector} must be 16-byte aligned`).toBe(0);
+      expect(PARAM_WORD[`${vector}Y`]).toBe(x + 1);
+      expect(PARAM_WORD[`${vector}Z`]).toBe(x + 2);
+    }
+  });
+
+  it('keeps the two pad words, so the struct has no implicit gaps', () => {
+    expect(PARAM_WORD.padA).toBe(18);
+    expect(PARAM_WORD.padB).toBe(19);
   });
 
   const frame: ParamsFrame = {
@@ -177,6 +196,7 @@ describe('the uniform layout', () => {
     tableSize: 2048,
     bucketCapacity: 8,
     count: 1000,
+    bounds: BOUNDS,
   };
 
   const packed = (
@@ -185,7 +205,7 @@ describe('the uniform layout', () => {
   ): { floats: Float32Array; ints: Uint32Array } => {
     const buffer = new ArrayBuffer(PARAMS_BYTES);
     writeParams(buffer, resolved, f);
-    return { floats: new Float32Array(buffer, 0, 12), ints: new Uint32Array(buffer, 48, 4) };
+    return { floats: new Float32Array(buffer, 0, 20), ints: new Uint32Array(buffer, 80, 4) };
   };
 
   it('writes every documented word', () => {
@@ -214,6 +234,26 @@ describe('the uniform layout', () => {
     expect(ints[0]).toBe(1000);
     expect(ints[1]).toBe(2047);
     expect(ints[2]).toBe(8);
+  });
+
+  it('carries the box, which is also the broadphase origin', () => {
+    const bounds = { min: [-1, -2, -3] as const, max: [4, 5, 6] as const };
+    const { floats } = packed(resolveParticleOptions(), { ...frame, bounds });
+    expect(floats[PARAM_WORD.boundsMinX]).toBe(-1);
+    expect(floats[PARAM_WORD.boundsMinY]).toBe(-2);
+    expect(floats[PARAM_WORD.boundsMinZ]).toBe(-3);
+    expect(floats[PARAM_WORD.boundsMaxX]).toBe(4);
+    expect(floats[PARAM_WORD.boundsMaxY]).toBe(5);
+    expect(floats[PARAM_WORD.boundsMaxZ]).toBe(6);
+  });
+
+  it('leaves the pad words zeroed', () => {
+    const buffer = new ArrayBuffer(PARAMS_BYTES);
+    new Uint8Array(buffer).fill(0xff);
+    writeParams(buffer, resolveParticleOptions(), frame);
+    const floats = new Float32Array(buffer);
+    expect(floats[PARAM_WORD.padA]).toBe(0);
+    expect(floats[PARAM_WORD.padB]).toBe(0);
   });
 
   it('stores invCell as 0 when the cell size is 0, rather than Infinity', () => {
@@ -247,16 +287,16 @@ describe('the uniform layout', () => {
   });
 
   it('rejects a buffer too small to hold the uniform', () => {
-    expect(() => writeParams(new ArrayBuffer(32), resolveParticleOptions(), frame)).toThrow(
-      /params buffer is 32 bytes, needs 64/,
+    expect(() => writeParams(new ArrayBuffer(64), resolveParticleOptions(), frame)).toThrow(
+      /params buffer is 64 bytes, needs 96/,
     );
   });
 
   it('accepts a larger buffer and writes only the first 64 bytes', () => {
     const buffer = new ArrayBuffer(256);
-    new Uint8Array(buffer, 64).fill(0xab);
+    new Uint8Array(buffer, 96).fill(0xab);
     writeParams(buffer, resolveParticleOptions(), frame);
-    expect(new Uint8Array(buffer, 64).every((byte) => byte === 0xab)).toBe(true);
+    expect(new Uint8Array(buffer, 96).every((byte) => byte === 0xab)).toBe(true);
   });
 
   it.each([0, 3, -4, 1000])('rejects a table size that is not a power of two (%i)', (tableSize) => {

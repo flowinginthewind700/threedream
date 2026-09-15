@@ -43,6 +43,9 @@ import {
   type ParticleField,
 } from './particleField.js';
 
+/** Shorthand, so the f32 op order below reads like the WGSL it mirrors. */
+const f = Math.fround;
+
 /** Slots per cell. 8 covers a uniform gas; the overflow counter says otherwise. */
 export const DEFAULT_BUCKET_CAPACITY = 8;
 
@@ -144,8 +147,12 @@ export class SpatialHash {
     this.mask = this.tableSize - 1;
     this.bucketCapacity = capacity;
     this.cellSize = cellSize;
-    this.invCell = 1 / cellSize;
-    this.origin = origin;
+    // Rounded to f32 on purpose: the shader receives `invCell` and `boundsMin`
+    // through a float uniform, so it multiplies by the f32 reciprocal. Doing the
+    // same here is what keeps a particle on a cell boundary in the same cell on
+    // both backends, and a boundary disagreement is a missed contact.
+    this.invCell = f(1 / f(cellSize));
+    this.origin = [f(origin[0]), f(origin[1]), f(origin[2])];
     this.counts = new Int32Array(this.tableSize);
     this.slots = new Int32Array(this.tableSize * capacity);
   }
@@ -164,9 +171,9 @@ export class SpatialHash {
   /** Integer cell coordinates of a world position. Matches the WGSL exactly. */
   cellCoords(x: number, y: number, z: number): readonly [number, number, number] {
     return [
-      Math.floor((x - this.origin[0]) * this.invCell),
-      Math.floor((y - this.origin[1]) * this.invCell),
-      Math.floor((z - this.origin[2]) * this.invCell),
+      Math.floor(f(f(x - this.origin[0]) * this.invCell)),
+      Math.floor(f(f(y - this.origin[1]) * this.invCell)),
+      Math.floor(f(f(z - this.origin[2]) * this.invCell)),
     ];
   }
 
