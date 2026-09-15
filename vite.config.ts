@@ -4,14 +4,15 @@ import { defineConfig, loadEnv } from 'vite';
  * Every page the site ships.
  *
  * Listed explicitly rather than left to Vite's single-`index.html` default:
- * `demo/physics-check.html` and `demo/shared-device.html` are the browser half
- * of two milestone gates, and a page that is not in `rollupOptions.input` is not
- * built, not deployed, and not testable -- while still looking perfectly fine on
- * the dev server, which serves any HTML it finds. That asymmetry is exactly the
- * kind of failure that reaches CI before it reaches anyone's eyes, so the list
- * is here where `tests/build_base.test.ts` and the e2e specs can see it.
+ * `demo/physics-check.html`, `demo/shared-device.html` and `demo/particles.html`
+ * are the browser half of three milestone gates, and a page that is not in
+ * `rollupOptions.input` is not built, not deployed, and not testable -- while
+ * still looking perfectly fine on the dev server, which serves any HTML it finds.
+ * That asymmetry is exactly the kind of failure that reaches CI before it reaches
+ * anyone's eyes, so the list is here where `tests/build_base.test.ts` and the e2e
+ * specs can see it.
  */
-const PAGES = ['index', 'physics-check', 'shared-device'] as const;
+const PAGES = ['index', 'physics-check', 'shared-device', 'particles'] as const;
 
 function pageInputs(): Record<string, string> {
   const inputs: Record<string, string> = {};

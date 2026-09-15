@@ -123,7 +123,10 @@ html, body {
 }
 .segmented-full .seg { flex: 1 1 0; }
 .seg svg { width: 14px; height: 14px; }
-.seg:hover { color: var(--text); background: var(--panel-2); }
+/* Disabled rather than hidden: the particles page greys out the counts an O(n^2)
+   n-body pass cannot afford, and a control that vanishes teaches nobody why. */
+.seg:hover:not(:disabled) { color: var(--text); background: var(--panel-2); }
+.seg:disabled { opacity: 0.4; cursor: not-allowed; }
 .seg.is-active {
   background: var(--panel);
   color: var(--text);
@@ -268,6 +271,76 @@ html, body {
   background: var(--copper-dim);
   border-color: var(--copper-dim);
   color: #f0e2cf;
+}
+
+/* A toggle that reads as pressed. Same metrics as `.btn`, so switching it on
+   cannot move the row it sits in. */
+.btn.is-on {
+  background: #23343a;
+  border-color: var(--teal-dim);
+  color: var(--teal);
+}
+.btn.is-on:hover:not(:disabled) { background: #2a4048; border-color: var(--teal-dim); }
+
+/* --- sliders: fixed track height, fixed value column, no reflow while dragging --- */
+.slider-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 10px 0;
+}
+.slider-row label {
+  flex: 0 0 auto;
+  font-size: 12px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.slider-row output {
+  flex: 0 0 46px;
+  font-family: var(--mono);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  text-align: right;
+  white-space: nowrap;
+}
+.slider-row input[type='range'] {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 18px;
+  margin: 0;
+  background: transparent;
+  appearance: none;
+  -webkit-appearance: none;
+  cursor: pointer;
+}
+.slider-row input[type='range']:focus-visible { outline: 2px solid var(--teal); outline-offset: 2px; }
+.slider-row input[type='range']::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--line);
+}
+.slider-row input[type='range']::-webkit-slider-thumb {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 14px;
+  height: 14px;
+  margin-top: -5px;
+  border-radius: 50%;
+  background: var(--copper);
+  border: 1px solid #1a1206;
+}
+.slider-row input[type='range']::-moz-range-track {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--line);
+}
+.slider-row input[type='range']::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--copper);
+  border: 1px solid #1a1206;
 }
 
 /* --- sparkline --- */

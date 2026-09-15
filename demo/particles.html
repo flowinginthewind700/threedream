@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ThreeDream - GPU particle layer</title>
+    <meta
+      name="description"
+      content="ThreeDream M3: up to 100,000 particles simulated in WGSL compute on the same GPUDevice three.js renders with, drawn as one InstancedMesh draw call, with WebGL2 and CPU fallbacks."
+    />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="app">
+      <header class="topbar">
+        <div class="brand">
+          <span class="logo" id="brand-logo" aria-hidden="true"></span>
+          <div class="brand-text">
+            <h1>ThreeDream</h1>
+            <p>GPU particles: one device, one draw call, three fallback tiers</p>
+          </div>
+        </div>
+        <!--
+          The tier is the headline control of this page, so it lives in the bar
+          rather than in a panel: M3's acceptance criterion is that the page keeps
+          working when WebGPU is missing, and the way to see that is to ask for a
+          worse tier on a good machine and watch the counters stay alive.
+        -->
+        <div class="segmented" id="tier-select" role="tablist" aria-label="Render tier">
+          <button class="seg is-active" data-tier="auto" role="tab" aria-selected="true">
+            <span data-icon="waypoints"></span> Auto
+          </button>
+          <button class="seg" data-tier="webgpu" role="tab" aria-selected="false">
+            <span data-icon="zap"></span> WebGPU
+          </button>
+          <button class="seg" data-tier="webgl2" role="tab" aria-selected="false">
+            <span data-icon="layers"></span> WebGL2
+          </button>
+          <button class="seg" data-tier="cpu" role="tab" aria-selected="false">
+            <span data-icon="cpu"></span> CPU
+          </button>
+        </div>
+      </header>
+
+      <main class="stage">
+        <div class="viewport" id="viewport">
+          <div class="viewport-overlay" id="overlay">
+            <span class="badge" id="tier-badge">no adapter</span>
+            <span class="badge" id="count-badge">0 particles</span>
+            <span class="badge" id="path-badge">cpu-upload</span>
+            <span class="badge" id="fps-badge">0 fps</span>
+          </div>
+          <!-- The page boots on load; this is the pre-probe / no-JS state. -->
+          <div class="loading" id="loading">Probing adapters&hellip;</div>
+        </div>
+
+        <aside class="sidebar" aria-label="Particle controls and results">
+          <section class="panel">
+            <h2 class="panel-title"><span data-icon="shield-check"></span> Tier</h2>
+            <dl class="stats">
+              <div><dt>running on</dt><dd id="ti-tier">&mdash;</dd></div>
+              <div><dt>asked for</dt><dd id="ti-requested">&mdash;</dd></div>
+              <div><dt>renderer backend</dt><dd id="ti-backend">&mdash;</dd></div>
+              <div><dt>device shared</dt><dd id="ti-device">&mdash;</dd></div>
+              <div><dt>instance path</dt><dd id="ti-path">&mdash;</dd></div>
+              <div><dt>blitted / frame</dt><dd id="ti-blit">&mdash;</dd></div>
+              <div><dt>feature level</dt><dd id="ti-level">&mdash;</dd></div>
+            </dl>
+            <p class="foot" id="verdict">Not built yet.</p>
+          </section>
+
+          <section class="panel">
+            <h2 class="panel-title"><span data-icon="orbit"></span> Simulation</h2>
+            <!--
+              Which button carries `is-active` IS the initial state: demo/particles.ts
+              reads it with initialSelected() instead of restating a default in JS,
+              and a URL parameter overrides both. Two declarations of one value
+              drift silently, and the sibling page has the scar to prove it.
+            -->
+            <div class="segmented segmented-full" id="count-select" role="tablist" aria-label="Particle count">
+              <button class="seg" data-count="1000" role="tab" aria-selected="false">1k</button>
+              <button class="seg is-active" data-count="10000" role="tab" aria-selected="true">10k</button>
+              <button class="seg" data-count="50000" role="tab" aria-selected="false">50k</button>
+              <button class="seg" data-count="100000" role="tab" aria-selected="false">100k</button>
+            </div>
+            <div class="slider-row">
+              <label for="radius-slider">radius scale</label>
+              <input id="radius-slider" type="range" min="0.4" max="3" step="0.1" value="1" />
+              <output id="radius-value" for="radius-slider">1.0&times;</output>
+            </div>
+            <div class="row">
+              <button class="btn is-on" id="collisions-btn" title="Sphere-sphere contacts through the spatial hash">
+                <span data-icon="atom"></span><span class="btn-label">Collisions</span>
+              </button>
+              <button class="btn" id="nbody-btn" title="All-pairs gravity. O(n^2), so the count is capped while it is on.">
+                <span data-icon="sparkles"></span><span class="btn-label">N-body</span>
+              </button>
+            </div>
+            <div class="row">
+              <button class="btn btn-primary" id="run-btn" title="Pause / resume the frame loop">
+                <span data-icon="pause"></span><span class="btn-label">Pause</span>
+              </button>
+              <button class="btn" id="reset-btn" title="Rebuild the field from the same seed">
+                <span data-icon="rotate-ccw"></span><span class="btn-label">Reset</span>
+              </button>
+            </div>
+          </section>
+
+          <section class="panel">
+            <h2 class="panel-title"><span data-icon="gauge"></span> Counters</h2>
+            <dl class="stats">
+              <div><dt>particles</dt><dd id="st-count">&mdash;</dd></div>
+              <div><dt>steps / frames</dt><dd id="st-steps">&mdash;</dd></div>
+              <div><dt>steps per frame</dt><dd id="st-spf">&mdash;</dd></div>
+              <div><dt>ms / frame</dt><dd id="st-ms">&mdash;</dd></div>
+              <div><dt>draw calls</dt><dd id="st-draws">&mdash;</dd></div>
+              <div><dt>triangles</dt><dd id="st-tris">&mdash;</dd></div>
+              <div><dt>contacts</dt><dd id="st-contacts">&mdash;</dd></div>
+              <div><dt>escaped</dt><dd id="st-escaped">&mdash;</dd></div>
+              <div><dt>hash overflow</dt><dd id="st-overflow">&mdash;</dd></div>
+              <div><dt>max speed</dt><dd id="st-speed">&mdash;</dd></div>
+              <div><dt>kinetic energy</dt><dd id="st-energy">&mdash;</dd></div>
+              <div><dt>digest</dt><dd id="st-digest">&mdash;</dd></div>
+            </dl>
+          </section>
+
+          <section class="panel">
+            <h2 class="panel-title"><span data-icon="terminal"></span> Log</h2>
+            <ul class="report" id="log"></ul>
+          </section>
+
+          <p class="foot">
+            The WGSL kernels and the renderer share one <code>GPUDevice</code>, and
+            the instance matrices are expanded on the device straight into the
+            buffer three.js owns &mdash; no particle position crosses the bus.
+            <code>ParticleView</code> never writes the field, so replay and training
+            stay independent of this layer; <code>e2e/particles_gpu.spec.ts</code>
+            asserts CPU/GPU parity.
+          </p>
+        </aside>
+      </main>
+    </div>
+    <script type="module" src="./particles.ts"></script>
+  </body>
+</html>
