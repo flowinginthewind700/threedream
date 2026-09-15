@@ -26,6 +26,7 @@ import {
   type RayHit,
   type Vec3,
 } from './types.js';
+import { digestHex } from '../core/digest.js';
 
 /** Steps in a full reference run. Long enough to settle, bounce, and slide. */
 export const REFERENCE_STEPS = 600;
@@ -345,21 +346,15 @@ export function digestValues(run: {
 }
 
 /**
- * FNV-1a over the raw bytes of every double, mixed with a second accumulator so
- * a reordering of two equal-magnitude values cannot hash to the same string.
- * Returned as hex plus the value count, because a digest that does not say how
- * much it covered makes a truncation bug look like a match.
+ * The digest of a reference run's values.
+ *
+ * Kept exported under its original name because the golden digest in this file
+ * and the specs that reproduce it are pinned to it, but the implementation is
+ * `core/digest.ts`: the GPU particle layer needs the identical hash and must not
+ * import `physics/` to get it.
  */
 export function digestValuesHex(values: Float64Array): string {
-  const bytes = new Uint8Array(values.buffer, values.byteOffset, values.byteLength);
-  let h1 = 0x811c9dc5;
-  let h2 = 0x01000193;
-  for (let i = 0; i < bytes.length; i++) {
-    h1 ^= bytes[i]!;
-    h1 = Math.imul(h1, 0x01000193) >>> 0;
-    h2 = (Math.imul(h2 ^ bytes[i]!, 0x85ebca6b) + (i & 0xff)) >>> 0;
-  }
-  return `${h1.toString(16).padStart(8, '0')}${h2.toString(16).padStart(8, '0')}`;
+  return digestHex(values);
 }
 
 export function digestRun(run: {
