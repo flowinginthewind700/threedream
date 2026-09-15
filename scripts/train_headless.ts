@@ -3,10 +3,25 @@
  *
  *   npm run train                      # default budget
  *   npm run train -- --episodes 4000 --seed 3 --out artifacts/policy.json
+ *   npm run train -- --backend wasm    # the Rust kernel instead of builtin.ts
  *
  * Trains a Gaussian policy on the `reach` task with the built-in deterministic
  * solver and prints a progress trace. The same loop drives the browser demo, so
  * a policy that trains here is a policy that plays there.
+ *
+ * # Why `--backend` is here at all
+ *
+ * `ReachEnv` has taken a `backend` option since M1, so the only thing missing
+ * was an entry point: without one, the Rust kernel could be benchmarked and
+ * unit-tested but never actually trained with, which is the one workload the
+ * 2.3x claim was measured for. Selecting a backend is a *training* decision
+ * rather than an environment decision, so it belongs on this command line and
+ * not in `ReachEnvOptions`' defaults.
+ *
+ * All three backends are deterministic, but they are not bit-identical to each
+ * other: a policy trained on `wasm` and evaluated on `builtin` is a policy run
+ * against slightly different contact dynamics. The printed header names the
+ * backend for exactly that reason, and the policy JSON records it too.
  */
 
 import { writeFileSync, mkdirSync } from 'node:fs';
@@ -16,6 +31,10 @@ import { GaussianPolicy } from '../src/ai/policy.js';
 import { Trainer } from '../src/ai/trainer.js';
 import { ReachEnv } from '../src/envs/reach.js';
 import { Rng } from '../src/core/rng.js';
+import type { PhysicsBackend } from '../src/physics/types.js';
+import { vec3 } from '../src/physics/types.js';
+import { createRapierPhysics } from '../src/physics/rapier.js';
+import { createWasmPhysics } from '../src/physics/wasm.js';
 
 interface CliOptions {
   episodes: number;
@@ -25,6 +44,59 @@ interface CliOptions {
   hidden: number[];
   learningRate: number;
   batch: number;
+  backend: BackendName;
+}
+
+/** The physics kernels `--backend` can select. */
+export type BackendName = 'builtin' | 'wasm' | 'rapier';
+
+export const BACKEND_NAMES: readonly BackendName[] = ['builtin', 'wasm', 'rapier'];
+
+/**
+ * The world the `reach` task is tuned in.
+ *
+ * These are `ReachEnv`'s own defaults for the backend it builds when handed
+ * none. Restating them here is deliberate: a caller-supplied backend bypasses
+ * that construction, so without this the wasm and rapier runs would train in a
+ * world with default gravity and no damping, and the reward curve would measure
+ * the difference between two tasks rather than between two kernels.
+ */
+const REACH_WORLD = {
+  fixedDt: 1 / 60,
+  gravity: vec3(0, 0, 0),
+  linearDamping: 2.4,
+  angularDamping: 2.4,
+  solverIterations: 6,
+} as const;
+
+export function parseBackendName(value: string): BackendName {
+  const name = value.toLowerCase();
+  if (!BACKEND_NAMES.includes(name as BackendName)) {
+    throw new Error(`unknown backend "${value}", expected one of ${BACKEND_NAMES.join(', ')}`);
+  }
+  return name as BackendName;
+}
+
+/**
+ * Build the backend, or `null` to let `ReachEnv` build its own default.
+ *
+ * `builtin` returns null rather than a fresh `BuiltinPhysics` so the default
+ * path stays literally the default path: the environment owns the backend, and
+ * `env.dispose()` is what frees it. The two WASM-capable backends are async
+ * because each lazily instantiates its module on first use, which is also why
+ * `main()` is async.
+ */
+export async function createTrainingBackend(
+  name: BackendName,
+): Promise<PhysicsBackend | null> {
+  switch (name) {
+    case 'builtin':
+      return null;
+    case 'wasm':
+      return createWasmPhysics({ ...REACH_WORLD });
+    case 'rapier':
+      return createRapierPhysics({ ...REACH_WORLD });
+  }
 }
 
 function parseArgs(argv: string[]): CliOptions {
@@ -35,6 +107,7 @@ function parseArgs(argv: string[]): CliOptions {
     hidden: [64, 64],
     learningRate: 0.02,
     batch: 16,
+    backend: 'builtin',
   };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -61,6 +134,9 @@ function parseArgs(argv: string[]): CliOptions {
         break;
       case '--batch':
         options.batch = Number(next());
+        break;
+      case '--backend':
+        options.backend = parseBackendName(next());
         break;
       case '--hidden':
         options.hidden = next()
@@ -94,14 +170,21 @@ function printHelp(): void {
   --batch N      episodes per policy update (default 16)
   --hidden a,b   MLP hidden layer sizes (default 64,64)
   --every N      log every N episodes (default 100)
+  --backend NAME physics kernel: ${BACKEND_NAMES.join(' | ')} (default builtin)
   --out PATH     write the trained policy JSON here`);
 }
 
-function main(): void {
+async function main(): Promise<void> {
   const options = parseArgs(process.argv.slice(2));
   const startedAt = Date.now();
 
-  const env = new ReachEnv({ seed: options.seed });
+  // Built before the env so a missing wasm artifact fails here, with the
+  // loader's own message, rather than as a mysterious error inside `reset()`.
+  const backend = await createTrainingBackend(options.backend);
+  const env = new ReachEnv({
+    seed: options.seed,
+    ...(backend ? { backend } : {}),
+  });
   const policy = new GaussianPolicy({
     observationSize: env.observationSize,
     actionSize: env.actionSize,
@@ -183,6 +266,8 @@ function main(): void {
   }
 
   env.dispose();
+  // The env only disposes a backend it built itself; this one came from here.
+  backend?.dispose();
 }
 
 interface EvaluationResult {
@@ -229,4 +314,10 @@ function evaluateGreedy(
   };
 }
 
-main();
+main().catch((error: unknown) => {
+  // An unhandled rejection in an async `main` prints a stack and exits 0 on some
+  // Node versions, which would make a failed training run look like a success to
+  // CI. Naming the exit code is the whole point of this handler.
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exit(1);
+});
