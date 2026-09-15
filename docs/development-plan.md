@@ -251,6 +251,12 @@
 - 规模：`scripts/bench_gpu_particles.mjs` 是阶梯基准（1k/10k/50k/100k），实测
   1.65 / 2.59 / 11.84 / 29.55 ms/步，每档 3 个 draw call、escaped 0；per-particle
   成本在 0.24–0.30 us 之间，是 O(n) 而不是撞墙。
+- 规模（实机 rAF 路径）：脚本化基准证明的是 kernel 扛得住，不是访客看到的那条路
+  扛得住。`demo/particles.html?tier=webgpu&strict=1&count=100000&collisions=1`
+  在真设备的实时循环下实测 22.9 fps、`frameMode=gpu-blit`、每帧 blit 6,400,000
+  字节（100k × mat4）、3 个 draw call、`gpuError=null`、escaped 0。同一档下
+  `hashOverflow` 是 416：416 个粒子这一步没能插进已满的桶，于是漏掉这一步的接触
+  检测。它是页面上的报告字段而不是失败——桶满了这件事必须看得见，不能被悄悄丢掉。
 - 回退：`demo/particles.html` 支持 `tier=auto|webgpu|webgl2|cpu` 与 `strict=1`；
   `e2e/particles.spec.ts` 在没有 WebGPU 的 `chromium` project 下跑 WebGL2 与 CPU 档，
   并断言 CPU 档同一 seed 两次跑出同一个 digest（格式 `hex:count`）。
