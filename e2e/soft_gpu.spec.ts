@@ -51,6 +51,16 @@ const LARGE_COUNT = 10_000;
 const PUBLISH_BYTES_PER_NODE = SOFT_PUBLISH_FLOATS_PER_NODE * 4;
 
 /**
+ * Steps a scripted run submits and times as one sample: `CHUNK` in demo/soft.ts.
+ *
+ * Restated rather than imported, because importing a *value* from the page would
+ * execute it. What it pins is the sample count behind `msPerStep`, which is a
+ * median: a median over one chunk is the mean it replaced, and this file is the
+ * one place a per-step cost on a real device is asserted at all.
+ */
+const SCRIPT_CHUNK_STEPS = 8;
+
+/**
  * `hex:count` -- the shape `SoftMesh.digest()` returns.
  *
  * The count rides along, so a digest can never be mistaken for one from a mesh of a
@@ -170,6 +180,13 @@ test.describe('one device, one colour-batched solve, no round trip', () => {
     expect(r.steps, dump(r)).toBe(STEPS);
     expect(r.msPerStep, dump(r)).toBeGreaterThan(0);
     expect(r.msPerStep, dump(r)).toBeLessThan(Number.POSITIVE_INFINITY);
+    // The spread, next to the headline: on a device that is also running a
+    // compositor, p95 over p50 is the difference between "the solver cost this"
+    // and "the machine was busy". A p95 below the p50 means the percentile is not
+    // one; zero samples means the median is the 0 it is initialised to.
+    expect(r.stepSamples, dump(r)).toBe(Math.ceil(STEPS / SCRIPT_CHUNK_STEPS));
+    expect(r.msPerStepP95, dump(r)).toBeGreaterThanOrEqual(r.msPerStep);
+    expect(r.msPerStepMean, dump(r)).toBeGreaterThan(0);
 
     // The plan, on the device: one island for a cloth, more than one colour because
     // adjacent edges share a node, and a workgroup count that is the ceiling at 64.

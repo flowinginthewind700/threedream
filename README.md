@@ -9,9 +9,9 @@ On top of that sits a WebGPU scale layer: a particle system at up to six compute
 dispatches a step, and a soft-body solver that colors the constraint graph so no
 two edges in one dispatch share a node. Both run on a device three.js is already
 using, and both blit their output straight into a buffer the renderer allocated,
-so a frame costs a few draw calls and no readback. On an iGPU: 100,000 particles
-at 29.5 ms/step, a 10,000-node cloth at 4.4-5.3 ms/step and 20,000 nodes at
-8.2-9.3.
+so a frame costs a few draw calls and no readback. On an iGPU, as the median of
+20 timed chunks a step: 100,000 particles at 20-26 ms/step, a 10,000-node cloth
+at 2.3-3.2 and 20,000 nodes at 3.9-6.3.
 
 一个跑在浏览器里的游戏与物理-AI 内核：确定性 ECS + 固定步长仿真循环、可插拔的物理
 层，以及在页面里实时训练的强化学习器。渲染用 three.js。仿真核心是纯 TypeScript，不
@@ -19,8 +19,8 @@ at 29.5 ms/step, a 10,000-node cloth at 4.4-5.3 ms/step and 20,000 nodes at
 在这之上是一层 WebGPU 规模层：粒子系统每步最多六次 compute dispatch；软体求解器给
 约束图着色，于是同一批 dispatch 里不会有两条边共用一个节点。两者都跑在 three.js
 已经在用的设备上，也都把输出直接 blit 进渲染器自己分配好的 buffer，所以一帧只有几个
-draw call、没有回读。iGPU 上：10 万粒子 29.5 ms/步，1 万节点布料 4.4–5.3 ms/步，
-2 万节点 8.2–9.3 ms/步。
+draw call、没有回读。iGPU 上，每步取 20 个计时 chunk 的中位数：10 万粒子 20–26
+ms/步，1 万节点布料 2.3–3.2 ms/步，2 万节点 3.9–6.3 ms/步。
 
 [![CI](https://github.com/flowinginthewind700/threedream/actions/workflows/ci.yml/badge.svg)](https://github.com/flowinginthewind700/threedream/actions/workflows/ci.yml)
 
@@ -232,25 +232,36 @@ count. `publish` writes into a buffer three.js already allocated, and
 `BufferAttribute(itemSize=3)`, neither a storage attribute nor
 `DynamicDrawUsage`, because the first would break the byte-for-byte
 correspondence and the second would overwrite it with a stale CPU array every
-frame. 10k nodes cost 1.40 MiB and 4.4-5.3 ms/step, 20k cost 2.81 MiB and
-8.2-9.3 ms/step, and 1k costs about what 10k does: the dispatch count does not
-depend on the node count, so at the bottom of the ladder a step is 69
-submissions and a queue flush rather than 1000 nodes of arithmetic. Those are
-the numbers `scripts/bench_gpu_soft.mjs` exists to print, and they are a floor
-— headless Chromium hands `requestAdapter()` whichever GPU the driver stack
-prefers, which on a laptop with no Vulkan ICD for the discrete card is the
-integrated one.
+frame. 10k nodes cost 1.40 MiB and 2.3-3.2 ms/step, 20k cost 2.81 MiB and
+3.9-6.3, and 1k costs 0.7-1.6: the ladder is about 0.7 ms of fixed cost — 69
+dispatch submissions and a queue flush, which the node count does not move —
+plus roughly 0.16 us a node, so the bottom rung is nearly all submission and
+the top one is mostly solve. Each number is the median of the 20 timed chunks a
+160-step rung produces, printed with its p95 beside it, because the mean over
+the four chunks a 30-step rung used to produce was a number one contended chunk
+could triple: the same rung on the same machine read 2.97 and then 10.07
+ms/step four minutes apart, in a run whose 20k rung came out *faster* than its
+10k one. Those are the numbers `scripts/bench_gpu_soft.mjs` exists to print,
+and they are a floor in device terms — headless Chromium hands
+`requestAdapter()` whichever GPU the driver stack prefers, which on a laptop
+with no Vulkan ICD for the discrete card is the integrated one — and not a
+floor from one run to the next, which is what the p95 column is there to show.
 
 一步是 `5 + iterations * colors` 个 dispatch：8 次迭代、8 个 color 的布料是 69 个，
 这个数字跟着图的最大度数走，不跟节点数走。`publish` 写进 three.js 已经分配好的那块
 buffer，`render/soft.ts` 把它直接 blit 进 mesh 的 position attribute —— 普通的
 `BufferAttribute(itemSize=3)`，既不是 storage attribute 也不是 `DynamicDrawUsage`，
 因为前者会破坏逐字节对应，后者会每帧用陈旧的 CPU 数组把刚 blit 进去的位置盖掉。
-1 万节点 1.40 MiB、4.4–5.3 ms/步，2 万节点 2.81 MiB、8.2–9.3 ms/步，而 1k 每步的开销与
-10k 相当：dispatch 数不随节点数变化，所以阶梯底部的一步是 69 次提交加一次队列 flush，
-而不是 1000 个节点的算术。这些正是 `scripts/bench_gpu_soft.mjs` 要打印的数字，而且它
-是一个下限 —— 无头 Chromium 会把 `requestAdapter()` 交给驱动栈偏好的那块 GPU，在一台
-独显没有 Vulkan ICD 的笔记本上，那就是集显。
+1 万节点 1.40 MiB、2.3–3.2 ms/步，2 万节点 2.81 MiB、3.9–6.3 ms/步，1k 是
+0.7–1.6 ms/步：整条阶梯约等于 0.7 ms 的固定开销（69 次 dispatch 提交加一次队列
+flush，节点数推不动它）加上每节点约 0.16 us，所以底部那一档几乎全是提交，顶部那一档
+才主要是求解。每个数字都是 160 步一档产出的 20 个计时 chunk 的中位数，旁边同时打印
+p95 —— 因为以前 30 步一档只有四个 chunk，而四个样本的均值是一个被抢占的 chunk 就能
+翻三倍的数字：同一档在同一台机器上相隔四分钟分别读到 2.97 与 10.07 ms/步，那一轮里
+20k 还比 10k「更快」。这些正是 `scripts/bench_gpu_soft.mjs` 要打印的数字，它们在设备
+意义上是下限（无头 Chromium 会把 `requestAdapter()` 交给驱动栈偏好的那块 GPU，在一台
+独显没有 Vulkan ICD 的笔记本上，那就是集显），但在轮次与轮次之间不是 —— 而那正是 p95
+那一列要显示的东西。
 
 The most expensive lesson in the layer is one the unit tests could not catch.
 The color selector originally read `global_invocation_id.z`, on the theory that
@@ -410,8 +421,8 @@ and `tests/tdd.test.ts` fails the build the moment a new module lands without on
 | `npm run test:e2e` | 48 Playwright tests over 7 specs, two projects: SwiftShader WebGL2 and ANGLE/Vulkan WebGPU | ~50s |
 | `npm run test:rust` | 68 native Rust tests for the solver | ~1s warm |
 | `npm run check:wasm` | 35 assertions over the committed `wasm/pkg`: ABI, provenance, behaviour | ~1s |
-| `node scripts/bench_gpu_particles.mjs` | the M3 ladder: per-step cost and draw calls at 1k/10k/50k/100k on a real device | ~2s |
-| `node scripts/bench_gpu_soft.mjs` | the M4 ladder: per-step cost, dispatches, colors and blit size at 1k/5k/10k/20k nodes | ~2s |
+| `node scripts/bench_gpu_particles.mjs` | the M3 ladder at 1k/10k/50k/100k particles, 160 steps a rung: per-step cost as p50/p95/mean over 20 chunk samples, draw calls, blit size | ~6s |
+| `node scripts/bench_gpu_soft.mjs` | the M4 ladder at 1k/5k/10k/20k nodes, 160 steps a rung: the same distribution, plus dispatches, colors and stretch | ~3s |
 
 The two e2e projects exist because the pages need two different GPUs. `demo`,
 `physics-check`, `particles` and `soft` only need *a* GL context, and headless

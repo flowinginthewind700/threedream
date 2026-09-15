@@ -152,7 +152,23 @@ export interface SoftReport {
   steps: number;
   stepsPerFrame: number;
   msPerFrame: number;
+  /**
+   * Per-step cost, and the distribution behind it.
+   *
+   * In a scripted run `msPerStep` is the *median* timed chunk; in the live loop
+   * it stays the EMA it always was, since that loop has no chunk boundaries. The
+   * median replaced a mean for a measured reason: a rung of 30 steps produces
+   * four chunks, and a mean over four samples is a number one contended chunk
+   * can triple. The same rung on the same machine read 2.9 ms/step and 10.0
+   * ms/step minutes apart, and the run that produced the 10.0 also reported
+   * 20k nodes *faster* than 10k, which is not a solver property. `msPerStepP95`
+   * keeps the spread visible rather than averaging it away, `msPerStepMean` is
+   * the statistic it replaced, and `stepSamples` says how much either rests on.
+   */
   msPerStep: number;
+  msPerStepMean: number;
+  msPerStepP95: number;
+  stepSamples: number;
   fps: number;
   behind: boolean;
   drawCalls: number;
@@ -218,6 +234,9 @@ const report: SoftReport = {
   stepsPerFrame: 0,
   msPerFrame: 0,
   msPerStep: 0,
+  msPerStepMean: 0,
+  msPerStepP95: 0,
+  stepSamples: 0,
   fps: 0,
   behind: false,
   drawCalls: 0,
@@ -745,6 +764,20 @@ function startLoop(): void {
 // ---------------------------------------------------------------------------
 
 /**
+ * The `p`th percentile of `samples`, nearest rank, and 0 when there are none.
+ *
+ * Nearest rank rather than interpolated: every number a benchmark prints should
+ * be one it actually measured, and with the handful of chunks a rung produces an
+ * interpolated midpoint is a cost no step ever had.
+ */
+function percentile(samples: readonly number[], p: number): number {
+  if (samples.length === 0) return 0;
+  const sorted = [...samples].sort((a, b) => a - b);
+  const rank = Math.min(sorted.length, Math.max(1, Math.ceil((p / 100) * sorted.length)));
+  return sorted[rank - 1];
+}
+
+/**
  * Run exactly `target` steps, timed, then stop and report.
  *
  * This is what `e2e/soft_gpu.spec.ts` and `scripts/bench_gpu_soft.mjs` drive, and
@@ -759,6 +792,12 @@ function startLoop(): void {
  * on an empty queue returns immediately, so without a chunk boundary the number
  * reported would be how long it took to *record* commands -- the one measurement
  * that makes a GPU look as fast as a CPU.
+ *
+ * A chunk is also the unit of timing, which makes the sample count a function of
+ * `target`: 30 steps is four samples, and a mean over four samples is a number one
+ * contended chunk can triple. So the headline is the median chunk with the spread
+ * printed next to it, and the bench ladder asks for enough steps for both to mean
+ * something.
  */
 async function runScripted(target: number): Promise<void> {
   const current = live;
@@ -767,6 +806,9 @@ async function runScripted(target: number): Promise<void> {
   const wallStart = performance.now();
   let chunks = 0;
   let workMs = 0;
+  // One per-step cost per chunk, so the headline number can be a median. See
+  // `msPerStep` on SoftReport for the measurement that made this necessary.
+  const stepSamples: number[] = [];
 
   while (current.runner.steps < target && live === current) {
     const n = Math.min(CHUNK, target - current.runner.steps);
@@ -776,7 +818,9 @@ async function runScripted(target: number): Promise<void> {
     current.renderer.info.reset();
     current.renderer.render(current.scene, current.camera);
     if (current.shared) await current.shared.device.queue.onSubmittedWorkDone();
-    workMs += performance.now() - t0;
+    const chunkMs = performance.now() - t0;
+    workMs += chunkMs;
+    stepSamples.push(chunkMs / n);
     chunks++;
     // Yield so a long run stays interruptible and the canvas is actually
     // presented; excluded from the timing above on purpose.
@@ -800,7 +844,10 @@ async function runScripted(target: number): Promise<void> {
   report.frames = Math.max(1, chunks);
   report.stepsPerFrame = done / report.frames;
   report.msPerFrame = workMs / report.frames;
-  report.msPerStep = done > 0 ? workMs / done : 0;
+  report.msPerStep = percentile(stepSamples, 50);
+  report.msPerStepMean = done > 0 ? workMs / done : 0;
+  report.msPerStepP95 = percentile(stepSamples, 95);
+  report.stepSamples = stepSamples.length;
   report.fps = wallMs > 0 ? (report.frames * 1000) / wallMs : 0;
 
   // Last, so the report describes the final state rather than the state the first
@@ -825,7 +872,8 @@ async function runScripted(target: number): Promise<void> {
 
   log(
     `${compact(report.steps)} steps | ${wallMs.toFixed(0)} ms wall | ${chunks} submits | ` +
-      `${report.msPerStep.toFixed(3)} ms/step | ${report.msPerFrame.toFixed(2)} ms/submit`,
+      `${report.msPerStep.toFixed(3)} ms/step p50 | p95 ${report.msPerStepP95.toFixed(3)} | ` +
+      `mean ${report.msPerStepMean.toFixed(3)} | ${report.msPerFrame.toFixed(2)} ms/submit`,
     'head',
   );
   log(
@@ -1268,6 +1316,9 @@ async function boot(): Promise<void> {
     stepsPerFrame: 0,
     msPerFrame: 0,
     msPerStep: 0,
+    msPerStepMean: 0,
+    msPerStepP95: 0,
+    stepSamples: 0,
     fps: 0,
     behind: false,
     drawCalls: 0,

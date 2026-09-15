@@ -40,6 +40,17 @@ const SEED = 1234;
 const LARGE_COUNT = 50_000;
 
 /**
+ * Steps a scripted run submits and times as one sample: `CHUNK` in
+ * demo/particles.ts.
+ *
+ * Restated rather than imported, because importing a *value* from the page would
+ * execute it. What it pins is the sample count behind `msPerStep`, which is a
+ * median: a median over one chunk is the mean it replaced, and a mean over four
+ * was the statistic that let one contended chunk triple a rung's reported cost.
+ */
+const SCRIPT_CHUNK_STEPS = 8;
+
+/**
  * `hex:count` -- the shape `ParticleField.digest()` returns.
  *
  * The count is part of the string, so a digest can never be mistaken for one
@@ -162,6 +173,13 @@ test.describe('one GPUDevice, one draw call, no round trip', () => {
     expect(r.steps, dump(r)).toBe(STEPS);
     expect(r.msPerStep, dump(r)).toBeGreaterThan(0);
     expect(r.msPerStep, dump(r)).toBeLessThan(Number.POSITIVE_INFINITY);
+    // The spread, next to the headline: on a device that is also running a
+    // compositor, p95 over p50 is the difference between "the kernels cost this"
+    // and "the machine was busy". A p95 below the p50 means the percentile is not
+    // one; zero samples means the median is the 0 it is initialised to.
+    expect(r.stepSamples, dump(r)).toBe(Math.ceil(STEPS / SCRIPT_CHUNK_STEPS));
+    expect(r.msPerStepP95, dump(r)).toBeGreaterThanOrEqual(r.msPerStep);
+    expect(r.msPerStepMean, dump(r)).toBeGreaterThan(0);
 
     // One draw call for the field; the scene's bounds helper and any clear pass
     // account for the small headroom above one.

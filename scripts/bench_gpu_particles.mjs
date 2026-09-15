@@ -25,10 +25,20 @@
  *
  * Exits non-zero when a rung errors, when `strict` refused the WebGPU tier (no
  * adapter, or ANGLE without Vulkan -- see the flag list below), or when a
- * particle escaped the box. Exits zero and prints the table otherwise; the
- * numbers are a floor, because headless Chromium hands `requestAdapter()`
- * whichever GPU the driver stack prefers, which on a laptop with an iGPU and no
- * Vulkan ICD for the discrete card is the integrated one.
+ * particle escaped the box. Exits zero and prints the table otherwise. The
+ * numbers are a floor in device terms, because headless Chromium hands
+ * `requestAdapter()` whichever GPU the driver stack prefers, which on a laptop
+ * with an iGPU and no Vulkan ICD for the discrete card is the integrated one.
+ *
+ * They are not a floor in run-to-run terms, and the table says so rather than
+ * implying otherwise. `p50 ms/step` is the median of the run's chunk samples,
+ * with `p95` and the `mean` printed beside it, because a mean over the four
+ * chunks a 30-step rung produced was a number one contended chunk could triple:
+ * the sibling soft-body gate measured the same rung at 2.97 and then 10.07
+ * ms/step four minutes apart on one machine, in a run whose 20k rung reported
+ * *faster* than its 10k one. `n` is the sample count, since a median is only as
+ * good as the chunks behind it. Read the acceptance criterion off p50, and how
+ * busy the machine was off the gap between p50 and p95.
  */
 import { createServer } from 'node:http';
 import { existsSync, readFileSync } from 'node:fs';
@@ -43,17 +53,22 @@ const COLLISIONS = process.env.BENCH_COLLISIONS ?? '1';
 /**
  * The ladder: `[particles, steps]`.
  *
- * Fewer steps at the top of the ladder, because the quantity being measured is
- * per-step cost and 20 steps is plenty of samples once each step is doing 100k
- * particles of work -- while the fixed cost of pipeline creation and buffer
- * allocation, which is what the small rungs mostly show, needs the same run to
- * be comparable.
+ * Every rung runs the same number of steps, for two reasons. The fixed cost of
+ * pipeline creation and buffer allocation is what the small rungs mostly show,
+ * and comparing that against the large rungs only means something at a common
+ * run length. And steps are the sample count: a chunk is eight steps, so 160
+ * steps is twenty samples, where the 20 and 30 this ladder used to ask for were
+ * three and four -- too few for a median to filter anything, which is how one
+ * contended chunk came to be able to triple a rung's reported per-step cost.
+ * Twenty is also the smallest count at which a nearest-rank p95 is not simply
+ * the maximum. It costs about five seconds on the 100k rung and a fraction of
+ * that below it.
  */
 const DEFAULT_LADDER = [
-  [1_000, 60],
-  [10_000, 60],
-  [50_000, 30],
-  [100_000, 20],
+  [1_000, 160],
+  [10_000, 160],
+  [50_000, 160],
+  [100_000, 160],
 ];
 
 const LADDER =
@@ -135,7 +150,10 @@ async function runRung(page, count, steps) {
 const header = [
   'particles',
   'steps',
-  'ms/step',
+  'n',
+  'p50 ms/step',
+  'p95',
+  'mean',
   'us/step/particle',
   'ms/frame',
   'blit KiB',
@@ -202,7 +220,10 @@ try {
     rows.push([
       String(r.count),
       String(r.steps),
+      String(r.stepSamples),
       r.msPerStep.toFixed(3),
+      r.msPerStepP95.toFixed(3),
+      r.msPerStepMean.toFixed(3),
       ((r.msPerStep * 1000) / r.count).toFixed(3),
       r.msPerFrame.toFixed(2),
       (r.blitBytes / 1024).toFixed(0),

@@ -42,12 +42,12 @@
 - `src/gpu/`：运行时能力探测与渲染档位选择（webgpu / webgl2 / cpu）、引用计数的
   共享 `GPUDevice` 管理器、外部 WGSL 的 compute 封装。
 - 粒子层：CPU 参照实现、WebGPU 每步最多六个 dispatch、设备上的实例展开，一次 draw
-  call
-  喂 three.js；100k 粒子 29.5 ms/步（iGPU，ANGLE/Vulkan，无回读）。
+  call 喂 three.js；100k 粒子 20–26 ms/步（iGPU，ANGLE/Vulkan，无回读；每步取 20
+  个计时 chunk 的中位数）。
 - 软体/布料层：island 分组 + 约束图着色分批，确定性 CPU 参照与 WebGPU 后端共用同一
   个 `SoftPlan`，一步是 `5 + iterations × colors` 个 dispatch，publish buffer 直接
-  blit 进 three.js 的位置 attribute；10k 节点布料 4.4–5.3 ms/步、20k 8.2–9.3 ms/步，
-  显存 1.40 / 2.81 MiB（本机，ANGLE/Vulkan，无回读）。
+  blit 进 three.js 的位置 attribute；10k 节点布料 2.3–3.2 ms/步、20k 3.9–6.3 ms/步，
+  显存 1.40 / 2.81 MiB（本机，ANGLE/Vulkan，无回读，同样是 20 个 chunk 的中位数）。
 - 带策略梯度的强化学习器，可在页面内训练。
 - three.js 渲染桥，渲染层不回写仿真状态。
 
@@ -253,9 +253,12 @@
   `InstancedInterleavedBuffer`，`backend.get()` 拿不到底层 `GPUBuffer`，于是整条
   GPU 路径静默退化成 CPU 上传。`tests/render_particles.test.ts` 覆盖这条退化与
   「拿不到 buffer 就大声失败」的守卫。
-- 规模：`scripts/bench_gpu_particles.mjs` 是阶梯基准（1k/10k/50k/100k），实测
-  1.65 / 2.59 / 11.84 / 29.55 ms/步，每档 3 个 draw call、escaped 0；per-particle
-  成本在 0.24–0.30 us 之间，是 O(n) 而不是撞墙。
+- 规模：`scripts/bench_gpu_particles.mjs` 是阶梯基准（1k/10k/50k/100k，每档 160
+  步、20 个计时 chunk），报的是每步成本的中位数：0.8 / 1.3 / 7.3–10.2 /
+  19.9–26.2 ms/步，每档 3 个 draw call、escaped 0；10k 以上的边际 per-particle
+  成本在 0.15–0.32 us 之间，是 O(n) 而不是撞墙。1k 那一档的 0.8 us/粒子不是单粒子
+  成本，那是六次 dispatch 的提交与队列 flush 摊到 1000 个粒子上的结果 —— 阶梯底部
+  量到的是固定开销，这一点在两个 GPU 层上是同一个形状。
 - 规模（实机 rAF 路径）：脚本化基准证明的是 kernel 扛得住，不是访客看到的那条路
   扛得住。`demo/particles.html?tier=webgpu&strict=1&count=100000&collisions=1`
   在真设备的实时循环下实测 22.9 fps、`frameMode=gpu-blit`、每帧 blit 6,400,000
@@ -344,13 +347,20 @@
   `VERTEX | COPY_SRC | COPY_DST`，这正是 blit 合法的全部理由。`surface` 与 `edges`
   共用同一个 attribute 对象，所以一次 blit 同时填好面与线框；`edges` 直接拿
   `constraints.ends` 当线索引，它本来就是 `[a0, b0, a1, b1, ...]`。
-- 规模：`scripts/bench_gpu_soft.mjs` 是 1k/5k/10k/20k 的阶梯。本机三次运行：10k
-  4.4–5.3 ms/步、20k 8.2–9.3 ms/步，即 0.41–0.53 us/节点，两档之间是线性的；1k
-  反而要 4.9–6.8 ms/步，因为那个尺寸下一步的成本是 69 次 dispatch 的提交与队列
-  flush，而不是 1000 个节点的算术。每档 8 个 color、3 个 draw call、escaped 0。
-  `stretch %` 一列在 5k–20k 读到 75–115%，那是收敛诊断而不是关卡：一次
-  Gauss-Seidel 扫描只把修正推进约一行，100×100 的布从顶边挂下来需要上百次扫描，
-  演示页的脚注也是这么写的。
+- 规模：`scripts/bench_gpu_soft.mjs` 是 1k/5k/10k/20k 的阶梯，每档 160 步，报的是
+  20 个计时 chunk 的中位数，p95 与它取代的均值一起打印。统计量是被一次实测改掉
+  的：这个关卡原来报四个 chunk 的均值，而四个样本的均值是一个被抢占的 chunk 就能
+  翻三倍的数字 —— 同一档在同一台机器上相隔四分钟读到 2.97 与 10.07 ms/步，那一轮
+  里 20k 还比 10k「更快」；事后查出的污染源是一个泄漏的基准浏览器进程在吃 990%
+  CPU。改成每档 160 步（20 个样本，也是最近秩 p95 不再等于最大值的最小样本数）
+  之后，本机四次运行：10k 2.3–3.2 ms/步、20k 3.9–6.3、1k 0.7–1.6，整条阶梯约等于
+  0.7 ms 固定开销（69 次 dispatch 提交 + 一次队列 flush，与节点数无关）加每节点约
+  0.16 us。所以「1k 与 10k 相当」是旧均值下的冷 chunk 假象：dispatch 数确实不随
+  节点数变化，但它只值一步里的 0.7 ms。每档 8 个 color、3 个 draw call、escaped 0。
+  `stretch %` 一列在 1k/5k/10k/20k 读到 10.7 / 47.5 / 131.5 / 156.4%，那是收敛
+  诊断而不是关卡，而且它是最后一步的快照（`maxConstraintError`），所以会随档位的
+  步数一起变，不能当成一个规格来引用：一次 Gauss-Seidel 扫描只把修正推进约一行，
+  100×100 的布从顶边挂下来需要上百次扫描，演示页的脚注也是这么写的。
 - 内存预算：`softGpuBudget(plan)` 从 plan 而不是从 mesh 算，因为 plan 是两个后端
   唯一逐字段同意的对象。1k / 10k / 20k 布料分别是 0.14 / 1.40 / 2.81 MiB，最大
   单块 buffer（`ends`）是 31 / 313 / 625 KiB。求解器在一个 stage 里绑 15 个

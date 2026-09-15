@@ -33,6 +33,16 @@ const COUNT = 2000;
 const SEED = 7;
 
 /**
+ * Steps a scripted run submits and times as one sample: `CHUNK` in
+ * demo/particles.ts.
+ *
+ * Restated rather than imported, because importing a *value* from the page would
+ * execute it. The point of pinning it is the sample count: `msPerStep` is a median
+ * over chunks, and a median over one chunk is the mean it replaced.
+ */
+const SCRIPT_CHUNK_STEPS = 8;
+
+/**
  * Collect page and console errors for the life of the page.
  *
  * Idempotent, because `open()` attaches it and a test that probes the adapter
@@ -138,6 +148,12 @@ test.describe('the particle layer without a GPU', () => {
     expect(first.tier, dump(first)).toBe('cpu');
     expect(first.steps, dump(first)).toBe(60);
     expect(first.msPerStep, dump(first)).toBeGreaterThan(0);
+    // The distribution behind the headline number. A p95 under the p50 would mean
+    // the percentile is not one, no samples at all would mean the median is the 0
+    // it is initialised to, and one sample would mean the median is the mean.
+    expect(first.stepSamples, dump(first)).toBe(Math.ceil(60 / SCRIPT_CHUNK_STEPS));
+    expect(first.msPerStepP95, dump(first)).toBeGreaterThanOrEqual(first.msPerStep);
+    expect(first.msPerStepMean, dump(first)).toBeGreaterThan(0);
     expect(first.canvasBytes, 'the final frame encoded to nothing').toBeGreaterThan(0);
     // `hex:count`: the count rides along, so a digest from a field of a
     // different size can never be mistaken for this one.

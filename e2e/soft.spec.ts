@@ -50,6 +50,15 @@ const DEFAULT_ITERATIONS = 8;
 /** `hex:count`, the shape `SoftMesh.digest()` returns. */
 const DIGEST = /^[0-9a-f]{8,}:\d+$/;
 
+/**
+ * Steps a scripted run submits and times as one sample: `CHUNK` in demo/soft.ts.
+ *
+ * Restated rather than imported, because importing a *value* from the page would
+ * execute it. The point of pinning it is the sample count: `msPerStep` is a median
+ * over chunks, and a median over one chunk is the mean it replaced.
+ */
+const SCRIPT_CHUNK_STEPS = 8;
+
 /** What each scene's mesh allows `SoftView` to draw. */
 const SCENES = [
   { scene: 'cloth', drawMode: 'surface' },
@@ -176,6 +185,12 @@ test.describe('the soft-body layer without a GPU', () => {
     expect(first.tier, dump(first)).toBe('cpu');
     expect(first.steps, dump(first)).toBe(60);
     expect(first.msPerStep, dump(first)).toBeGreaterThan(0);
+    // The distribution behind the headline number. A p95 under the p50 would mean
+    // the percentile is not one, no samples at all would mean the median is the 0
+    // it is initialised to, and one sample would mean the median is the mean.
+    expect(first.stepSamples, dump(first)).toBe(Math.ceil(60 / SCRIPT_CHUNK_STEPS));
+    expect(first.msPerStepP95, dump(first)).toBeGreaterThanOrEqual(first.msPerStep);
+    expect(first.msPerStepMean, dump(first)).toBeGreaterThan(0);
     expect(first.canvasBytes, 'the final frame encoded to nothing').toBeGreaterThan(0);
     expect(first.digest, dump(first)).toMatch(DIGEST);
     expect(first.stats.escaped, `a node left the box:\n${dump(first)}`).toBe(0);
