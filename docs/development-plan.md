@@ -30,13 +30,19 @@
 
 仓库已经有一个能跑、能测、能部署的内核：
 
-- 359 个单元测试 + 68 个原生 Rust 测试 + 19 个浏览器测试，`npm run verify` 全绿。
+- 882 个单元测试 + 68 个原生 Rust 测试 + 30 个浏览器测试（`chromium` 与
+  `chromium-webgpu` 两个 project），`npm run verify` 全绿。
 - GitHub Actions 五任务四关卡：类型检查与构建、覆盖率、浏览器渲染、Rust 内核与
   wasm 产物校验。
-- Pages 自动部署，线上 demo 可用：训练页、`physics-check`、`shared-device`。
+- Pages 自动部署，线上 demo 可用：训练页、`physics-check`、`shared-device`、
+  `particles`。
 - 确定性 ECS、固定步长引擎、事件总线。
 - `PhysicsBackend` 抽象，已有 `builtin`、`wasm`（自研 Rust 内核）与 `rapier` 三个实现。
-- `src/gpu/capabilities.ts`：运行时能力探测与渲染档位选择（webgpu / webgl2 / cpu）。
+- `src/gpu/`：运行时能力探测与渲染档位选择（webgpu / webgl2 / cpu）、引用计数的
+  共享 `GPUDevice` 管理器、外部 WGSL 的 compute 封装。
+- 粒子层：CPU 参照实现、WebGPU 每步最多六个 dispatch、设备上的实例展开，一次 draw
+  call
+  喂 three.js；100k 粒子 29.5 ms/步（iGPU，ANGLE/Vulkan，无回读）。
 - 带策略梯度的强化学习器，可在页面内训练。
 - three.js 渲染桥，渲染层不回写仿真状态。
 
@@ -166,6 +172,8 @@
 
 ### M2：共享 GPUDevice 的 WebGPU 桥
 
+状态：已完成（2026-09-15）。
+
 时间：1–2 周。
 
 任务：
@@ -183,7 +191,25 @@
 - 断言脚本纳入 CI。
 - 设备不可用时自动回退，不出现白屏或静默失败。
 
+落地证据：
+
+- `src/gpu/device.ts`：`SharedDeviceManager` 引用计数地持有唯一一个 `GPUDevice`，
+  `acquireSharedDevice` 是唯一入口；device lost 之后 manager 记下 `failure` 并允许
+  下一次 acquire 重建设备，`tests/gpu_device.test.ts` 用一个会丢设备的 stub 覆盖
+  这条路径。
+- `src/gpu/compute.ts`：`ComputeBuffer` / `ComputeProgram` / `ComputeContext` /
+  `PingPong` / `submitCopy`，即「外部 WGSL compute pipeline 的通用封装」；编译失败
+  抛 `ShaderCompilationError` 并带上浏览器给出的消息，不是静默降级。
+- 零拷贝的 buffer 句柄：`renderer.backend.get(attribute).buffer` 直接拿到 three.js
+  自己创建的 `GPUBuffer`，`src/render/particles.ts` 用它做 blit 目标。
+- 降级矩阵：`selectRenderTier` 只吃探测结果，`probeParticles` 在其上给出粒子层的
+  档位与理由；WebGPU -> WebGL2 -> CPU 全部是运行时判断。
+- CI：`e2e/shared_device.spec.ts` 在 `chromium-webgpu` project 下用 ANGLE/Vulkan 拿
+  真实设备，把那三条断言每次 push 都跑一遍。
+
 ### M3：GPU 粒子层
+
+状态：已完成（2026-09-15）。
 
 时间：2 周。
 
@@ -202,6 +228,40 @@
 - WebGPU 不可用时自动降级到 WebGL2 或 CPU。
 - 回放与训练不依赖 GPU 层。
 - 渲染帧率与仿真步长解耦。
+
+落地证据：
+
+- 状态容器与 ping-pong：`src/gpu/particleGpu.ts` 用 `PingPong` 持有粒子 SoA，一步是
+  `nbody? -> hash_clear -> hash_scatter -> collide? -> integrate -> publish`，与
+  `CpuParticleSystem.step` 逐 pass 对齐，步内不回读。没有前缀和：broadphase 用固定
+  容量的桶加 `atomicAdd`，溢出计进 `statsBuf` 而不是被悄悄丢掉。
+- kernel：`src/gpu/particleWgsl.ts` 从 CPU 常量生成 WGSL，所以 n-body、重力、碰撞
+  反弹、边界约束只有一份数值定义；`tests/particle_wgsl.test.ts` 钉住 params uniform
+  的偏移与成员顺序、六个入口点的顺序、以及 workgroup 恒为 64 且不用 subgroup，
+  96 字节这个总数由 `tests/particle_gpu.test.ts` 的 buffer 预算断言钉住。
+- broadphase：`src/gpu/particleHash.ts` 是空间哈希（原子计数 + 桶容量），CPU 与
+  WGSL 共用同一套 cell 数学，`hashOverflow` 是报告字段而不是断言。
+- 渲染不回写：`src/gpu/particleInstances.ts` 在设备上把粒子展开成 mat4，
+  `src/render/particles.ts` 把它 blit 进 three.js 的 `instanceMatrix`。关键是那个
+  attribute 必须是 `StorageInstancedBufferAttribute`：普通的
+  `InstancedBufferAttribute` 会被 `createInstanceMatrixNode` 包进
+  `InstancedInterleavedBuffer`，`backend.get()` 拿不到底层 `GPUBuffer`，于是整条
+  GPU 路径静默退化成 CPU 上传。`tests/render_particles.test.ts` 覆盖这条退化与
+  「拿不到 buffer 就大声失败」的守卫。
+- 规模：`scripts/bench_gpu_particles.mjs` 是阶梯基准（1k/10k/50k/100k），实测
+  1.65 / 2.59 / 11.84 / 29.55 ms/步，每档 3 个 draw call、escaped 0；per-particle
+  成本在 0.24–0.30 us 之间，是 O(n) 而不是撞墙。
+- 回退：`demo/particles.html` 支持 `tier=auto|webgpu|webgl2|cpu` 与 `strict=1`；
+  `e2e/particles.spec.ts` 在没有 WebGPU 的 `chromium` project 下跑 WebGL2 与 CPU 档，
+  并断言 CPU 档同一 seed 两次跑出同一个 digest（格式 `hex:count`）。
+  `e2e/particles_gpu.spec.ts` 在真设备下断言 blit 路径。GPU 与 CPU 的对照是带容差
+  的，不是逐位相等：碰撞顺序与哈希插入都用原子操作，两个重叠粒子谁先被推开是硬件
+  没承诺过的，所以比对的是动能与速度包络的相对误差、接触数、escaped 与
+  hashOverflow。确定性住在 CPU 档里。
+- 帧率与步长解耦：`ParticleRunner.frame(dt)` 按固定步长切片，`demo/particles.ts`
+  里另有一条 scripted 路径专门给基准与 e2e 用。
+- 训练与回放不碰 GPU 层：粒子层只从 `src/index.ts` 导出纯 TypeScript 部分，
+  `render/` 依旧不在 barrel 里。
 
 ### M4：GPU 规模物理层
 
@@ -291,14 +351,14 @@
 
 ## 立即行动
 
-M0 与 M1 已落地，证据见各里程碑下的「落地证据」。接下来按 M2 -> M3 推进：
+M0 到 M3 已落地，证据见各里程碑下的「落地证据」。接下来按 M4 推进：
 
-1. 把 `requestDevice()` 与 `WebGPURenderer` 收敛成单例设备管理器：目前
-   `demo/shared-device.ts` 里是一次性的证明代码，还不是可复用 API。
-2. 在 `src/gpu/` 增加外部 WGSL compute pipeline 的通用封装，并把那三条断言迁进
-   去，让 demo 只负责展示。
-3. 设备丢失与上下文丢失的恢复路径：`selectRenderTier` 已经能给出档位，缺的是
-   运行中丢设备之后的处理。
-4. 给 `npm run train` 加 `--backend wasm`：env 早就接受 `backend` 选项，缺的只是
-   脚本入口；补上之后无头训练才能用上这个内核。
-5. 做一个 50k 粒子的 WebGPU demo，并保留 WebGL2 回退（M3）。
+1. 给 `npm run train` 加 `--backend wasm`：这是 M2 遗留项，env 早就接受 `backend`
+   选项，缺的只是脚本入口；补上之后无头训练才能用上这个内核。
+2. island 分组与 workgroup 映射：M4 的第一块，先做一个确定性的 CPU 参照分组器，
+   再把它搬到设备上，顺序与粒子层一致。
+3. 约束图着色分批，避免同一批 dispatch 里的数据竞争；workgroup size 固定 64，
+   不依赖 subgroup。
+4. 软体/布料/质点弹簧的最小 kernel，规模目标 10,000 级。
+5. 性能与内存预算：`scripts/bench_gpu_particles.mjs` 的阶梯形式可以直接复用，
+   M4 需要一份等价的基准与一条 CI 里跑得动的门槛。

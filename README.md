@@ -5,10 +5,17 @@ fixed-timestep simulation loop, a pluggable physics layer, and a reinforcement
 learner that trains live in the page. Rendering is three.js. The simulation core
 is plain TypeScript and needs no browser and no GPU; a Rust/wasm kernel
 implements the same solver bit for bit, for the runs where speed matters.
+On top of that sits a WebGPU particle layer: up to six compute dispatches a step,
+on a device three.js is already using, and an instance buffer expanded on the GPU
+and blitted straight into the renderer, so a frame costs one draw call and no
+readback. 100,000 particles run at 29.5 ms/step on an iGPU.
 
 一个跑在浏览器里的游戏与物理-AI 内核：确定性 ECS + 固定步长仿真循环、可插拔的物理
 层，以及在页面里实时训练的强化学习器。渲染用 three.js。仿真核心是纯 TypeScript，不
 依赖浏览器和 GPU；Rust/wasm 内核逐位实现同一个求解器，用在需要速度的场合。
+在这之上是一层 WebGPU 粒子：每步最多六次 compute dispatch，跑在 three.js 已经在用的
+设备上；实例矩阵在 GPU 上展开后直接 blit 进渲染器，所以一帧只有一个 draw call、没有
+回读。iGPU 上 10 万粒子 29.5 ms/步。
 
 [![CI](https://github.com/flowinginthewind700/threedream/actions/workflows/ci.yml/badge.svg)](https://github.com/flowinginthewind700/threedream/actions/workflows/ci.yml)
 
@@ -26,7 +33,7 @@ Live demo: <https://flowinginthewind700.github.io/threedream/>, deployed from
 npm install
 npm run dev       # browser demo on http://localhost:5173
 npm run train     # headless training in Node, prints a progress trace
-npm test          # 359 unit tests, ~24s
+npm test          # 882 unit tests, ~23s
 npm run verify    # typecheck + test + build
 ```
 
@@ -50,20 +57,27 @@ on the sparkline, then flip **Playback** from `Random` to `Learned` to see what 
 learned. The viewport badge tracks how many episodes the current policy has behind
 it. **Reach** is the harder of the two tasks.
 
-Two more pages ship beside the trainer. `/physics-check.html` runs one canonical
-scene through `builtin`, `wasm` and a wasm replay in your own browser and
-compares the digests. `/shared-device.html` proves that a single `GPUDevice` can
-back three.js rendering and a raw WGSL compute pipeline at the same time, which
-is the assumption the whole GPU roadmap rests on.
+Three more pages ship beside the trainer. `/physics-check.html` runs one
+canonical scene through `builtin`, `wasm` and a wasm replay in your own browser
+and compares the digests. `/shared-device.html` proves that a single `GPUDevice`
+can back three.js rendering and a raw WGSL compute pipeline at the same time,
+which is the assumption the whole GPU roadmap rests on. `/particles.html` is the
+M3 demo: pick a tier (`auto`, `webgpu`, `webgl2`, `cpu`), a particle count and a
+seed, and the sidebar reports the tier it actually landed on, whether the frame
+went through the GPU blit or a CPU upload, and the draw-call count — the claims
+are measured on the page rather than asserted in prose.
 
 演示页里直接训练。点 **Train**，看火花线上 mean episode return 上升，再把
 **Playback** 从 `Random` 切到 `Learned`，就能看到它学到了什么。视口角标记录当前策略
 背后有多少 episode。**Reach** 是两个任务里更难的那个。
 
-训练页旁边还有两个页面。`/physics-check.html` 在你自己的浏览器里用 `builtin`、
+训练页旁边还有三个页面。`/physics-check.html` 在你自己的浏览器里用 `builtin`、
 `wasm` 和一次 wasm 回放跑同一个规范场景，并比对摘要。`/shared-device.html` 证明
 同一个 `GPUDevice` 可以同时支撑 three.js 渲染与一条裸 WGSL compute pipeline，
-这正是整条 GPU 路线图所依赖的前提。
+这正是整条 GPU 路线图所依赖的前提。`/particles.html` 是 M3 的演示页：选档位
+（`auto`、`webgpu`、`webgl2`、`cpu`）、粒子数与随机种子，侧栏会报告它实际落在哪个
+档位、这一帧走的是 GPU blit 还是 CPU 上传、以及 draw call 数 —— 这些结论是在页面上
+量出来的，不是写在文档里的。
 
 ## Why it is shaped this way
 
@@ -76,7 +90,7 @@ Two rules drive the design:
 2. **Everything that matters is deterministic.** A seeded RNG, a fixed timestep,
    and no hidden global state mean `engine.step(n)` in Node and `engine.frame(dt)`
    in a browser produce the same simulation. That is what makes a physics-AI
-   kernel testable: all 359 tests run without a GPU, and the wasm backend is
+   kernel testable: all 882 unit tests run without a GPU, and the wasm backend is
    held to the bits of the TypeScript solver it ports.
 
 两条规则决定了整体设计：
@@ -85,7 +99,7 @@ Two rules drive the design:
    于是同一个场景既能无头训练，也能在浏览器里渲染游玩，结果完全一致。
 2. **关键路径都是确定性的。** 带种子的 RNG、固定步长、没有隐藏的全局状态，所以 Node
    里的 `engine.step(n)` 与浏览器里的 `engine.frame(dt)` 跑的是同一个仿真。这让一个
-   物理-AI 内核变得可测：359 个测试全都不需要 GPU，而 wasm 后端要对齐它所移植的 TS
+   物理-AI 内核变得可测：882 个单元测试全都不需要 GPU，而 wasm 后端要对齐它所移植的 TS
    求解器的每一个比特。
 
 ## Layers
@@ -93,10 +107,10 @@ Two rules drive the design:
 ```
 core     clock / ECS / events / engine facade     no three.js, no WASM
 physics  backend interface + three solvers        no three.js
-gpu      capability probing + render tier         no three.js, no WASM
+gpu      probe, shared device, particle layer     no three.js, no WASM
 ai       MLP, Gaussian policy, policy-gradient    no three.js, no WASM
 envs     learning tasks (drive, reach)            physics only
-render   three.js bridge                          the only layer importing three
+render   three.js bridge + particle view          the only layer importing three
 ```
 
 `src/index.ts` re-exports everything **except** `render`. Importing the barrel
@@ -110,6 +124,11 @@ never instantiates a module it did not ask for.
 is a probe, not a build flag: `selectRenderTier` takes adapter results as
 arguments and returns `webgpu`, `webgl2` or `cpu`. Nothing in it reads
 `import.meta.env`, so the fallback cannot be baked in at compile time.
+The same layer owns the shared `GPUDevice` (`device.ts`, refcounted, with a
+recovery path for device loss), the wrapper that lets external WGSL bind
+three.js's own buffers (`compute.ts`), and the particle simulation — a CPU
+reference implementation beside the GPU one, so the WGSL can be checked against
+numbers rather than against a screenshot.
 
 `src/index.ts` 重导出**除** `render` **之外**的全部内容。引入这个入口不能把 three.js
 带进训练脚本，所以浏览器代码直接引 `ThreeRenderer`。这是刻意的约束，不是遗漏。两个
@@ -119,6 +138,9 @@ WASM 后端**在**这个入口里，引入它们依然不花代价：各自的�
 `gpu/` 是判断浏览器图形栈成色的那一层，而且是探测，不是构建开关：
 `selectRenderTier` 接收 adapter 探测结果作为参数，返回 `webgpu`、`webgl2` 或
 `cpu`。它内部不读 `import.meta.env`，所以回退路径不可能在编译期被写死。
+这一层同时持有共享的 `GPUDevice`（`device.ts`，引用计数，带设备丢失后的恢复路径）、
+让外部 WGSL 直接绑定 three.js 自己那些 buffer 的封装（`compute.ts`），以及粒子仿真
+—— CPU 参照实现与 GPU 实现并排放着，所以 WGSL 要对齐的是一组数字，而不是一张截图。
 
 ### Physics backends
 
@@ -251,11 +273,22 @@ and `tests/tdd.test.ts` fails the build the moment a new module lands without on
 
 | Command | What it runs | Cost |
 |---|---|---|
-| `npm test` | 359 unit tests, headless, no GPU needed | ~24s |
-| `npm run test:coverage` | same suite under v8, floor enforced by `vitest.config.ts` | ~16s |
-| `npm run test:e2e` | 19 Playwright tests over 3 specs, against a real browser | ~25s |
+| `npm test` | 882 unit tests, headless, no GPU needed | ~23s |
+| `npm run test:coverage` | same suite under v8, floor enforced by `vitest.config.ts` | ~35s |
+| `npm run test:e2e` | 30 Playwright tests over 5 specs, two projects: SwiftShader WebGL2 and ANGLE/Vulkan WebGPU | ~60s |
 | `npm run test:rust` | 68 native Rust tests for the solver | ~1s warm |
 | `npm run check:wasm` | 35 assertions over the committed `wasm/pkg`: ABI, provenance, behaviour | ~1s |
+| `node scripts/bench_gpu_particles.mjs` | the M3 ladder: per-step cost and draw calls at 1k/10k/50k/100k on a real device | ~10s |
+
+The two e2e projects exist because the pages need two different GPUs. `demo`,
+`physics-check` and `particles` only need *a* GL context, and headless Chromium
+has none, so they run on SwiftShader: that the render layer works without
+hardware is the property worth testing. `shared-device` and the GPU half of
+`particles` need a real `GPUDevice`, which means ANGLE's Vulkan backend with the
+WebGPU service enabled. Same browser, different flags, and a flag set that works
+for one silently downgrades the other. The four tests that assume *no* adapter
+skip themselves on a machine that has one, rather than reporting a tier the
+machine did not produce.
 
 Coverage is a separate command, not a flag on `npm test`: instrumenting the
 training inner loop costs ~10x wall time, and folding that into the fast loop
@@ -263,7 +296,7 @@ would destroy the red/green cadence the tests exist to provide. So the coverage
 run skips the two convergence tests (`COVERAGE=1`, `tests/trainer.test.ts`) that
 cost 180s of the 185s and contribute ~0.3% of branch coverage — `npm test` still
 runs them, and `tests/tdd.test.ts` pins that asymmetry. The floor sits a few
-points under what the suite actually measures (93/82 against 98/89), which is
+points under what the suite actually measures (93/82 against 98/92), which is
 the part that matters — a threshold set far below current reality is decoration,
 while one set at it makes every refactor a fight.
 
@@ -293,7 +326,7 @@ determinism claim rests on.
 把它塞进快速循环会毁掉测试本该提供的红/绿节奏。因此覆盖率运行会跳过那两个收敛测试
 （`COVERAGE=1`，`tests/trainer.test.ts`）—— 它们占了 185s 里的 180s，却只贡献约 0.3%
 的分支覆盖率；`npm test` 照跑不误，这条不对称由 `tests/tdd.test.ts` 钉死。
-下限压在实测值之下几个点（实测 98 / 89，下限 93 / 82）—— 这才是关键：远低于现状的
+下限压在实测值之下几个点（实测 98 / 92，下限 93 / 82）—— 这才是关键：远低于现状的
 阈值只是装饰，而贴着现状设阈值则会让每次重构都变成搏斗。
 
 `.github/workflows/ci.yml` 是单文件五任务：`verify`（类型检查 + 测试 + 构建）、
@@ -346,18 +379,19 @@ Nothing in `src/`, `tests/` or the demo depends on it, so a plain
 ```
 src/core/      clock.ts ecs.ts engine.ts events.ts rng.ts
 src/physics/   types.ts builtin.ts wasm.ts rapier.ts reference.ts components.ts
-src/gpu/       capabilities.ts
+src/gpu/       capabilities.ts device.ts compute.ts particle*.ts
 src/ai/        mlp.ts policy.ts trainer.ts baseline.ts
 src/envs/      types.ts drive.ts reach.ts
-src/render/    scene.ts
+src/render/    scene.ts particles.ts
 rust/          physics (solver) / physics-wasm (ABI) / gpu (wgpu skeleton)
 wasm/pkg/      committed wasm-pack output, rebuilt by `npm run build:wasm`
 scripts/       train_headless.ts check_wasm_artifact.mjs bench_*.mjs
                audit_unreal_reference.mjs clone_unreal_reference.sh
 docs/          feasibility study, development plan, demo assets
-demo/          index (trainer), physics-check, shared-device: .html + .ts
-tests/         18 files, 359 tests
-e2e/           demo (WebGL), wasm physics, shared device (WebGPU)
+demo/          index (trainer), physics-check, shared-device, particles: .html + .ts
+tests/         31 files, 882 tests
+e2e/           demo, wasm physics, particles (WebGL); shared device and the GPU
+               half of particles (WebGPU)
 .github/       ci.yml: four gates (verify / coverage / e2e / rust) then Pages deploy
 thirdparty/    UnrealEngine (submodule, opt-in)
 ```
