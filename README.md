@@ -263,6 +263,33 @@ p95 —— 因为以前 30 步一档只有四个 chunk，而四个样本的均�
 独显没有 Vulkan ICD 的笔记本上，那就是集显），但在轮次与轮次之间不是 —— 而那正是 p95
 那一列要显示的东西。
 
+The tier below that one has a number too, because "the fallback works" and "the
+fallback is usable at scale" are two different claims and only the second one is
+an acceptance criterion. `scripts/bench_cpu_soft.ts` runs the same ladder, the
+same scene, seed and iteration count through `src/gpu/softCpu.ts`, which is the
+shipped fallback rather than a restatement of it, and the same code the `webgl2`
+and `cpu` tiers both simulate on. It reads 1.5 / 7.9 / 15.9 / 32.1 ms/step at
+1k / 5k / 10k / 20k nodes: about 1.6 us a node with no fixed cost worth naming,
+roughly ten times the device tier's marginal 0.16 us. So 10k nodes cost a whole
+60 Hz frame before anything is drawn, and the fallback's stated target is ~2k
+nodes at 60 Hz (about 3.2 ms/step, which leaves the rest of the frame for
+drawing and for the engine) rather than the 20k the device tier holds. Its p95
+sits within a percent of its p50, and printing both is the point: with no driver
+submission and no queue flush inside the timed region, that spread is the
+machine's own noise floor, so whatever is wider than it in the GPU table above
+belongs to the device path.
+
+下面那一档同样有数字，因为「回退能用」与「回退在规模上可用」是两条不同的结论，而只有
+第二条是验收项。`scripts/bench_cpu_soft.ts` 用同一条阶梯、同一个场景、同一个 seed 与
+同样的迭代次数跑 `src/gpu/softCpu.ts`：那是实际交付的回退路径，不是它的复述，也正是
+`webgl2` 与 `cpu` 两档共用的那份仿真代码。它在 1k / 5k / 10k / 20k 节点上读到
+1.5 / 7.9 / 15.9 / 32.1 ms/步，每节点约 1.6 us，固定开销小到不值得命名，大约是设备档
+每节点 0.16 us 的十倍。于是 1 万节点在还没开始画之前就已经吃掉一整个 60 Hz 帧，回退档
+给出的明确目标是 60 Hz 下约 2k 节点（约 3.2 ms/步，把这一帧剩下的预算留给绘制与引擎
+其余部分），而不是设备档站得住的 2 万。它的 p95 与 p50 相差在百分之一以内，而把两个都
+打出来正是重点：计时区间里没有驱动提交也没有队列 flush，这个离散度就是机器本身的噪声
+底，所以上面那张 GPU 表里比它更宽的部分，属于设备路径。
+
 The most expensive lesson in the layer is one the unit tests could not catch.
 The color selector originally read `global_invocation_id.z`, on the theory that
 a dispatch dimension is a free channel into the kernel. It is not: dispatch
@@ -423,6 +450,7 @@ and `tests/tdd.test.ts` fails the build the moment a new module lands without on
 | `npm run check:wasm` | 35 assertions over the committed `wasm/pkg`: ABI, provenance, behaviour | ~1s |
 | `node scripts/bench_gpu_particles.mjs` | the M3 ladder at 1k/10k/50k/100k particles, 160 steps a rung: per-step cost as p50/p95/mean over 20 chunk samples, draw calls, blit size | ~6s |
 | `node scripts/bench_gpu_soft.mjs` | the M4 ladder at 1k/5k/10k/20k nodes, 160 steps a rung: the same distribution, plus dispatches, colors and stretch | ~3s |
+| `npx tsx scripts/bench_cpu_soft.ts` | the same M4 ladder on the fallback tier: `softCpu.ts`, single-threaded, no GPU, p50/p95 a step at 1k-20k nodes and a fitted us/node | ~10s |
 
 The two e2e projects exist because the pages need two different GPUs. `demo`,
 `physics-check`, `particles` and `soft` only need *a* GL context, and headless
