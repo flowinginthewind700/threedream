@@ -44,6 +44,7 @@ import {
 } from '../src/gpu/softOptions.js';
 import {
   SOFT_BASELINE_STORAGE_BUFFERS,
+  SOFT_BATCH_STRIDE_BYTES,
   SOFT_BATCH_U32_PER_COLOR,
   SOFT_BINDINGS,
   SOFT_EDGE_F32_PER_CONSTRAINT,
@@ -413,12 +414,40 @@ describe('entry points', () => {
     expect([...code.matchAll(/sumSq\(/g)]).toHaveLength(4);
   });
 
-  it('reads the batch off the z axis, where the dispatcher puts it', () => {
-    // The one line softSolveDispatch exists to document. A dispatcher that put the
-    // color in y would compile, run, and solve color 0 iterations * colors times.
-    expect(bodyOf('solve')).toContain('let batch = batchBuf[gid.z];');
+  it('reads its batch from the one slot its bind group exposes', () => {
+    // The whole color-selection mechanism, in one line of WGSL: the view is eight
+    // bytes wide, so element 0 is this color's (base, count) and a *wrong* color is
+    // unreachable rather than merely untested-for.
+    expect(bodyOf('solve')).toContain('let batch = batchBuf[0u];');
     expect(bodyOf('solve')).toContain('let e = orderBuf[batch.x + gid.x];');
-    expect(code).not.toContain('gid.y');
+  });
+
+  it('reads no dispatch dimension but x, in any kernel', () => {
+    // Extra dispatch dimensions are concurrent, not sequential: `dispatchWorkgroups(x,
+    // 1, c + 1)` runs c + 1 slices of `solve` at the same time, which would race the
+    // very colors the coloring exists to separate and never solve the last one. With
+    // no kernel reading y or z, a dispatcher that reached for one finds nothing on
+    // the other end of it.
+    for (const axis of ['y', 'z']) {
+      for (const id of ['gid', 'wid', 'lid']) {
+        expect(code, `${id}.${axis}`).not.toContain(`${id}.${axis}`);
+      }
+    }
+  });
+
+  it('pads each color to a whole bind-group slot, at the alignment the spec fixes', () => {
+    // A bind group's view has to start at a multiple of minStorageBufferOffsetAlignment.
+    // That limit is not requested, so the device carries its WebGPU default of 256 and
+    // every slot offset here is legal without asking the adapter anything. Requesting
+    // the limit could only lower it, never raise it above the default.
+    expect(SOFT_BATCH_STRIDE_BYTES).toBe(256);
+    expect(REQUESTED_LIMITS as readonly string[]).not.toContain(
+      'minStorageBufferOffsetAlignment',
+    );
+    // The payload has to fit in the slot it is padded into, and the slot has to be a
+    // whole number of words for the upload that fills it.
+    expect(SOFT_BATCH_U32_PER_COLOR * 4).toBeLessThanOrEqual(SOFT_BATCH_STRIDE_BYTES);
+    expect(SOFT_BATCH_STRIDE_BYTES % 4).toBe(0);
   });
 });
 
@@ -621,15 +650,17 @@ describe('buffer sizing constants', () => {
     const E = SOFT_ENDS_U32_PER_CONSTRAINT;
     expect(bodyOf('solve')).toContain(`let a = endsBuf[e * ${E}u];`);
     expect(bodyOf('solve')).toContain(`let b = endsBuf[e * ${E}u + 1u];`);
-    expect(bodyOf('solve')).toContain('let batch = batchBuf[gid.z];');
+    expect(bodyOf('solve')).toContain('let batch = batchBuf[0u];');
     expect(bodyOf('solve')).toContain('let e = orderBuf[batch.x + gid.x];');
     expect(bodyOf('publish')).toContain(
       `publishBuf[i * ${SOFT_PUBLISH_FLOATS_PER_NODE}u] = p.x;`,
     );
     // A vec2<u32> is 8 bytes at an 8-byte alignment, so the batch table is the one
-    // buffer whose WGSL stride is not its element count.
+    // buffer whose WGSL stride is not its element count -- and the one whose slots
+    // are padded past that stride, so a bind group can hand over a single pair.
     expect(SOFT_BINDINGS.find((b) => b.name === 'batchBuf')!.type).toBe('array<vec2<u32>>');
     expect(SOFT_BATCH_U32_PER_COLOR).toBe(2);
+    expect(SOFT_BATCH_STRIDE_BYTES).toBeGreaterThanOrEqual(SOFT_BATCH_U32_PER_COLOR * 4);
   });
 
   it('sizes the per-constraint and per-island buffers', () => {
@@ -675,10 +706,18 @@ describe('buffer sizing constants', () => {
 });
 
 describe('softSolveDispatch', () => {
-  it('puts the workgroup count on x and the color on z', () => {
+  it('is the batch workgroup count, and says nothing about the color', () => {
     const batch: SoftBatch = { color: 5, base: 320, count: 129, workgroups: 3 };
-    expect(softSolveDispatch(batch)).toEqual([3, 1, 5]);
-    expect(softSolveDispatch({ color: 0, base: 0, count: 0, workgroups: 0 })).toEqual([0, 1, 0]);
+    expect(softSolveDispatch(batch)).toBe(3);
+    // An empty batch dispatches zero workgroups, which `submit` skips rather than
+    // records -- the same rule that makes an empty graph cost nothing.
+    expect(softSolveDispatch({ color: 0, base: 0, count: 0, workgroups: 0 })).toBe(0);
+    // Color 0 is a dispatch like any other. Nothing about it can be zero-shaped,
+    // because the color is chosen by the bind group and not by a number here.
+    const first: SoftBatch = { color: 0, base: 0, count: 640, workgroups: 10 };
+    expect(softSolveDispatch(first)).toBe(10);
+    // Two batches of one size dispatch identically; only their bindings differ.
+    expect(softSolveDispatch({ ...first, color: 7, base: 640 })).toBe(softSolveDispatch(first));
   });
 
   it('tiles the colored order for every scene', () => {
@@ -693,11 +732,9 @@ describe('softSolveDispatch', () => {
         expect(batch.color, `${scene} batch ${c}`).toBe(c);
         expect(batch.base, `${scene} batch ${c}`).toBe(base);
         expect(batch.count, `${scene} batch ${c}`).toBeGreaterThan(0);
-        const [x, y, z] = softSolveDispatch(batch);
+        const x = softSolveDispatch(batch);
         expect(x, `${scene} batch ${c} x`).toBe(softWorkgroups(batch.count));
         expect(batch.workgroups, `${scene} batch ${c}`).toBe(x);
-        expect(y, `${scene} batch ${c} y`).toBe(1);
-        expect(z, `${scene} batch ${c} z`).toBe(c);
         base += batch.count;
       }
       // The batches tile `order` with no gap and no overlap, which is what makes one
@@ -710,20 +747,20 @@ describe('softSolveDispatch', () => {
     }
   });
 
-  it('keeps both dimensions inside what a dispatch allows', () => {
-    // WebGPU caps every dispatch dimension at 65535. MAX_COLORS is far under it, so
-    // z always holds a color; x is the one a large mesh could overflow, and it is
-    // bounded by the biggest single color rather than by the graph.
+  it('keeps the one dimension inside what a dispatch allows, and the table small', () => {
+    // WebGPU caps every dispatch dimension at 65535, and only x is used: it is
+    // bounded by the biggest single color rather than by the graph, so a mesh that
+    // fits in memory dispatches. MAX_COLORS bounds the batch table instead.
     expect(MAX_COLORS).toBe(32);
-    expect(MAX_COLORS).toBeLessThanOrEqual(65535);
+    expect(MAX_COLORS * SOFT_BATCH_STRIDE_BYTES).toBe(8192);
     for (const scene of SOFT_SCENES) {
       const mesh = new SoftMesh({ count: 600, scene });
       const coloring = buildSoftLayout(mesh, resolveSoftOptions({ iterations: 2 })).coloring;
+      expect(coloring.colors, scene).toBeLessThanOrEqual(MAX_COLORS);
       for (const batch of coloring.batches) {
-        const [x, y, z] = softSolveDispatch(batch);
-        expect(z, scene).toBeLessThan(MAX_COLORS);
+        const x = softSolveDispatch(batch);
         expect(x, scene).toBeLessThanOrEqual(65535);
-        expect(y, scene).toBe(1);
+        expect(x, scene).toBeGreaterThan(0);
       }
       expect(coloring.maxBatchSize, scene).toBe(
         Math.max(...coloring.batches.map((b) => b.count)),

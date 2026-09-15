@@ -25,19 +25,31 @@
  * ordering is the only barrier this pipeline has. `solve` reads and writes `predBuf`
  * in place, so iteration *k + 1* has to be a later dispatch, not a wider one.
  *
- * # Why the batch rides on the z axis
+ * # Why each color gets its own bind group
  *
  * Two constraints of one color are race-free, but two colors are not, so each color
  * is its own dispatch and the kernel still has to learn *which* batch it is
- * running. The alternatives are all worse: rewriting a uniform per dispatch needs a
- * submit per dispatch (24 submits a step at the default iteration count), and a
- * dynamic offset needs a 256-byte stride per slot for 8 bytes of data. Instead the
- * batch table is one static buffer of `(base, count)` pairs built when the mesh is
- * built, and the dispatcher puts the color index in the z dimension, where
- * `global_invocation_id.z` hands it to the kernel for free. A whole step is then one
- * command buffer with no per-dispatch CPU work at all. `softSolveDispatch` is the
- * one place that mapping is written down, because it is exactly the kind of
- * contract that drifts between a shader and a dispatcher.
+ * running. The tempting answer -- put the color index on a second dispatch dimension
+ * and read `global_invocation_id.z` -- is wrong in a way that raises no error: extra
+ * dispatch dimensions are *concurrent*, not sequential. `dispatchWorkgroups(x, 1,
+ * c + 1)` runs `c + 1` slices of the same kernel at the same time, so it would solve
+ * every color up to `c` inside one dispatch, with colors that share a node racing in
+ * exactly the way the coloring exists to prevent, and the last color never solved at
+ * all. A dispatch dimension is a parallel axis and the color is a sequential one.
+ *
+ * So the selector rides on the binding instead. `batchBuf` is one buffer of
+ * `(base, count)` pairs built when the mesh is, each pair alone in a 256-byte slot,
+ * and color *c* is dispatched with a bind group whose view of that buffer is slot
+ * *c* and nothing else: eight bytes, one element, so the kernel reads `batchBuf[0u]`
+ * and cannot reach another color's pair even if it tried. `SOFT_BATCH_STRIDE_BYTES`
+ * says why the slots are padded and `softSolveDispatch` is the one place the x count
+ * is written down.
+ *
+ * The alternative that needs no padding is a uniform rewrite per dispatch, and a
+ * rewrite is only visible after a submit, so that is `iterations * colors` submits a
+ * step -- 24 at the defaults -- where the submit is the expensive part of a frame.
+ * `colors` bind groups are built once, when the mesh is, and the whole step is then
+ * one command buffer with nothing written per dispatch.
  *
  * # Why `solve` contains no atomics
  *
@@ -137,7 +149,13 @@ export const SOFT_ORDER_U32_PER_CONSTRAINT = 1;
  */
 export const SOFT_EDGE_F32_PER_CONSTRAINT = 2;
 
-/** `u32`s per color in `batchBuf`: `(base, count)`, packed as a `vec2<u32>`. */
+/**
+ * `u32`s of payload per color in `batchBuf`: `(base, count)`, packed as a `vec2<u32>`.
+ *
+ * Two words at the start of a `SOFT_BATCH_STRIDE_BYTES` slot, which is the whole
+ * mechanism: a bind group that exposes one slot gives the kernel one element to read
+ * and no way to index a neighbour.
+ */
 export const SOFT_BATCH_U32_PER_COLOR = 2;
 
 /**
@@ -166,9 +184,10 @@ export type SoftKernel = (typeof SOFT_KERNELS)[number];
  *
  * `nodeWorkgroups` means the island-mapped kernels, which walk the padded node
  * order and so dispatch `plan.nodeWorkgroups` groups whose 64 lanes all belong to
- * one island. `batch` is `solve` alone: its x count comes from the color's batch
- * and its z from the color index, which is what makes the two dimensions of one
- * dispatch mean different things.
+ * one island. `batch` is `solve` alone: its workgroup count comes from the color's
+ * own batch, and the color itself comes from the bind group that dispatch is
+ * recorded with. Every dispatch here is one-dimensional, which is what keeps the
+ * parallel axis of a dispatch from being mistaken for the sequential one.
  */
 export type SoftKernelDispatch =
   | 'nodeWorkgroups'
@@ -187,16 +206,33 @@ export const SOFT_KERNEL_DISPATCH: Readonly<Record<SoftKernel, SoftKernelDispatc
 };
 
 /**
- * Dispatch dimensions of one `solve`: `(workgroups, 1, color)`.
+ * Bytes from one color's `(base, count)` pair to the next in `batchBuf`.
  *
- * The z dimension is the batch index the kernel reads out of `batchBuf`, and the y
- * dimension is always 1 because a batch is a flat run of constraints. Written down
- * once, here, next to the shader text that depends on it: a dispatcher that put the
- * color in y instead would compile, run, and solve color 0 `iterations * colors`
- * times.
+ * 256 and not 8, because a bind group's view of a buffer has to start at a multiple
+ * of `minStorageBufferOffsetAlignment`. That limit is deliberately not in
+ * `REQUESTED_LIMITS`: a limit nobody asks for is the WebGPU default, the default is
+ * 256 by specification, and no implementation ships a larger one -- so this is the
+ * one number in the layer that is right without querying a device. Requesting it
+ * could only ever lower it, and 256 is already the floor.
+ *
+ * The padding costs 248 bytes a color against a mesh that is kilobytes a node, and
+ * buys the property the whole design rests on: a color's dispatch physically cannot
+ * read another color's batch.
  */
-export function softSolveDispatch(batch: SoftBatch): readonly [number, number, number] {
-  return [batch.workgroups, 1, batch.color];
+export const SOFT_BATCH_STRIDE_BYTES = 256;
+
+/**
+ * Workgroups for one `solve` dispatch: its batch's own count, on x and on x alone.
+ *
+ * One dispatch per color per iteration, in color order, with the color carried by
+ * the bind group rather than by a dispatch dimension -- the file header says why a
+ * dimension cannot carry it. Written down once, here, next to the shader text that
+ * depends on it, because `batch.workgroups` is `softWorkgroups(batch.count)`: the
+ * tail of a batch that is not a multiple of 64 is dropped by the kernel's
+ * `gid.x >= batch.y` guard, not by a rounding decision at the dispatch site.
+ */
+export function softSolveDispatch(batch: SoftBatch): number {
+  return batch.workgroups;
 }
 
 /** Words in `statsBuf`. The order is pinned by the test against the kernel text. */
@@ -597,14 +633,17 @@ fn predict(
 
 // Passes 2..N+1: one color of the constraint graph, applied to the predictions.
 //
-// Which color arrives on the z axis, so the whole step is one command buffer with
-// nothing written per dispatch. No atomics anywhere in here: the coloring guarantees
-// that no two invocations of one dispatch touch the same node, which is what makes
-// the parallel solve and the CPU's sequential walk of the same order compute the
-// same thing.
+// Which color this is arrives on the binding, not on a dispatch dimension: the bind
+// group this dispatch was recorded with exposes one ${SOFT_BATCH_STRIDE_BYTES}-byte slot of
+// batchBuf, so element 0 is this color's (base, count) and no other color's pair is
+// reachable from here. No atomics anywhere in here: the coloring guarantees that no
+// two invocations of one dispatch touch the same node, which is what makes the
+// parallel solve and the CPU's sequential walk of the same order compute the same thing.
 @compute @workgroup_size(${SOFT_WORKGROUP_SIZE})
 fn solve(@builtin(global_invocation_id) gid: vec3<u32>) {
-  let batch = batchBuf[gid.z];
+  // The view is one element wide. Indexing anything else is out of bounds, which is
+  // the point: a color cannot read another color's batch by accident or by design.
+  let batch = batchBuf[0u];
   if (gid.x >= batch.y) { return; }
   let e = orderBuf[batch.x + gid.x];
   let a = endsBuf[e * 2u];
