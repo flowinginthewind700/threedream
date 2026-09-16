@@ -1,5 +1,7 @@
 import { defineConfig, loadEnv } from 'vite';
 
+import { DEMO_PAGES } from './demo/pages.js';
+
 /**
  * Every page the site ships.
  *
@@ -11,13 +13,19 @@ import { defineConfig, loadEnv } from 'vite';
  * finds. That asymmetry is exactly the kind of failure that reaches CI before it
  * reaches anyone's eyes, so the list is here where `tests/build_base.test.ts` and
  * the e2e specs can see it.
+ *
+ * The list itself is `demo/pages.ts`, the same array `demo/nav.ts` renders as the
+ * nav strip every page carries, so "built but unreachable" and "linked but not
+ * built" are both unrepresentable rather than merely unlikely. This file derives
+ * its inputs from that array instead of restating it, and `tests/demo_nav.test.ts`
+ * loads this config and compares the two, which is what makes the derivation a
+ * contract rather than a comment.
  */
-const PAGES = ['index', 'physics-check', 'shared-device', 'particles', 'soft'] as const;
-
 function pageInputs(): Record<string, string> {
   const inputs: Record<string, string> = {};
-  for (const page of PAGES) {
-    inputs[page] = new URL(`./demo/${page}.html`, import.meta.url).pathname;
+  for (const page of DEMO_PAGES) {
+    const name = page.file.replace(/\.html$/, '');
+    inputs[name] = new URL(`./demo/${page.file}`, import.meta.url).pathname;
   }
   return inputs;
 }

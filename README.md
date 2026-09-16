@@ -40,6 +40,26 @@ the sidebars are read off the running engine.
 | Particles | [particles.html](https://flowinginthewind700.github.io/threedream/particles.html) | 1k-100k particles: which tier the browser gave you, blit or CPU upload, draw calls, hash overflow. |
 | Soft bodies | [soft.html](https://flowinginthewind700.github.io/threedream/soft.html) | Cloth / sheets / cube / rope up to 20k nodes: islands, color batches, dispatches a step, the race-free flag, max stretch. |
 
+Every page carries the same nav strip, generated from the same page list the
+build reads (`demo/pages.ts`), so arriving on any one of them shows the other
+four with the page you are on marked current. The screenshots here and the share
+cards are real captures of these pages, produced by `scripts/capture_shots.mjs`
+against a build served at the Pages subpath; each capture is gated on the page's
+own report first, so a shot that silently fell back to a worse tier fails the run
+rather than shipping under a caption it does not earn.
+
+![the particle page at 100,000 particles on the WebGPU tier](docs/demo-particles.jpg)
+
+100,000 particles on the tier the browser actually granted. The badges are the
+live report: `gpu-blit` means the frame was copied on the device and never
+crossed the bus.
+
+![the soft-body page with 20,000 nodes in four sheets](docs/demo-soft.jpg)
+
+20,000 soft-body nodes in four sheets, solved in coloured constraint batches on
+the same `GPUDevice` three.js renders with. The sidebar is the plan the two graph
+passes produced, next to the backend's own `raceFree` flag.
+
 Locally, `npm run dev` serves the same five at `http://localhost:5173/` and
 `http://localhost:5173/{page}.html`.
 
@@ -56,6 +76,21 @@ Locally, `npm run dev` serves the same five at `http://localhost:5173/` and
 | 粒子 | [particles.html](https://flowinginthewind700.github.io/threedream/particles.html) | 1k–100k 粒子：浏览器实际给了哪个档位、走 blit 还是 CPU 上传、draw call 数、哈希溢出数。 |
 | 软体 | [soft.html](https://flowinginthewind700.github.io/threedream/soft.html) | 布料 / 多片布 / 立方体 / 绳，最多 2 万节点：island 数、着色批次数、每步 dispatch 数、无竞争标志、最大拉伸。 |
 
+每个页面都带同一条导航条，由构建读取的同一份页面清单（`demo/pages.ts`）生成，所以落在
+任意一页都能看到其余四页，当前页会被标出来。这里与分享卡片用的截图都是这些页面的真实
+抓取：`scripts/capture_shots.mjs` 在以 Pages 子路径提供的构建上拍摄，每张都先过页面自己
+报告的那一关，于是真回退到更差档位的截图会让脚本失败，而不是顶着一句它配不上的说明发出去。
+
+![10 万粒子、WebGPU 档位的粒子页](docs/demo-particles.jpg)
+
+10 万粒子，跑在浏览器实际给出的档位上。角标读的是实时报告：`gpu-blit` 意味着这一帧在设备
+上拷贝完成，没有过总线。
+
+![2 万节点、四片布的软体页](docs/demo-soft.jpg)
+
+2 万软体节点分成四片布，用着色的约束批次在 three.js 渲染所用的同一块 `GPUDevice` 上求解。
+侧栏就是那两趟图分析产出的计划，旁边是后端自己的 `raceFree` 标志。
+
 本地 `npm run dev` 提供同样五个页面：`http://localhost:5173/` 与
 `http://localhost:5173/{page}.html`。
 
@@ -65,7 +100,7 @@ Locally, `npm run dev` serves the same five at `http://localhost:5173/` and
 npm install
 npm run dev       # the five browser demos on http://localhost:5173
 npm run train     # headless training in Node, prints a progress trace
-npm test          # 1318 unit tests, ~22s
+npm test          # 1360 unit tests, ~21s
 npm run verify    # typecheck + test + build
 ```
 
@@ -127,7 +162,7 @@ Two rules drive the design:
 2. **Everything that matters is deterministic.** A seeded RNG, a fixed timestep,
    and no hidden global state mean `engine.step(n)` in Node and `engine.frame(dt)`
    in a browser produce the same simulation. That is what makes a physics-AI
-   kernel testable: all 1318 unit tests run without a GPU, and the wasm backend is
+   kernel testable: all 1360 unit tests run without a GPU, and the wasm backend is
    held to the bits of the TypeScript solver it ports. The two GPU layers are held
    to a CPU reference the same way, and neither claims determinism for itself:
    `deterministic` is false on both backends, because atomics promise no order, so
@@ -139,7 +174,7 @@ Two rules drive the design:
    于是同一个场景既能无头训练，也能在浏览器里渲染游玩，结果完全一致。
 2. **关键路径都是确定性的。** 带种子的 RNG、固定步长、没有隐藏的全局状态，所以 Node
    里的 `engine.step(n)` 与浏览器里的 `engine.frame(dt)` 跑的是同一个仿真。这让一个
-   物理-AI 内核变得可测：1318 个单元测试全都不需要 GPU，而 wasm 后端要对齐它所移植的
+   物理-AI 内核变得可测：1360 个单元测试全都不需要 GPU，而 wasm 后端要对齐它所移植的
    TS 求解器的每一个比特。两个 GPU 层用同样的方式对齐一份 CPU 参照，而且都不替自己
    声称确定性：两个后端的 `deterministic` 都是 false，因为原子操作不承诺顺序，所以
    训练与回放永远走参照档。
@@ -443,14 +478,15 @@ and `tests/tdd.test.ts` fails the build the moment a new module lands without on
 
 | Command | What it runs | Cost |
 |---|---|---|
-| `npm test` | 1318 unit tests, headless, no GPU needed | ~22s |
+| `npm test` | 1360 unit tests, headless, no GPU needed | ~21s |
 | `npm run test:coverage` | same suite under v8, floor enforced by `vitest.config.ts` | ~21s |
-| `npm run test:e2e` | 48 Playwright tests over 7 specs, two projects: SwiftShader WebGL2 and ANGLE/Vulkan WebGPU | ~50s |
+| `npm run test:e2e` | 50 Playwright tests over 7 specs, two projects: SwiftShader WebGL2 and ANGLE/Vulkan WebGPU | ~50s |
 | `npm run test:rust` | 68 native Rust tests for the solver | ~1s warm |
 | `npm run check:wasm` | 35 assertions over the committed `wasm/pkg`: ABI, provenance, behaviour | ~1s |
 | `node scripts/bench_gpu_particles.mjs` | the M3 ladder at 1k/10k/50k/100k particles, 160 steps a rung: per-step cost as p50/p95/mean over 20 chunk samples, draw calls, blit size | ~6s |
 | `node scripts/bench_gpu_soft.mjs` | the M4 ladder at 1k/5k/10k/20k nodes, 160 steps a rung: the same distribution, plus dispatches, colors and stretch | ~3s |
 | `npx tsx scripts/bench_cpu_soft.ts` | the same M4 ladder on the fallback tier: `softCpu.ts`, single-threaded, no GPU, p50/p95 a step at 1k-20k nodes and a fitted us/node | ~10s |
+| `node scripts/capture_shots.mjs` | the screenshots in this file and the share cards: 8 captures of the built pages served at the Pages subpath, each gated on the page's own tier report | ~40s |
 
 The two e2e projects exist because the pages need two different GPUs. `demo`,
 `physics-check`, `particles` and `soft` only need *a* GL context, and headless
@@ -577,11 +613,13 @@ src/render/    scene.ts particles.ts soft.ts
 rust/          physics (solver) / physics-wasm (ABI) / gpu (wgpu skeleton)
 wasm/pkg/      committed wasm-pack output, rebuilt by `npm run build:wasm`
 scripts/       train_headless.ts check_wasm_artifact.mjs bench_*.mjs
-               audit_unreal_reference.mjs clone_unreal_reference.sh
+               capture_shots.mjs audit_unreal_reference.mjs
+               clone_unreal_reference.sh
 docs/          feasibility study, development plan, demo assets
 demo/          index (trainer), physics-check, shared-device, particles, soft:
-               each one a .html + .ts pair
-tests/         40 files, 1318 tests
+               each one a .html + .ts pair, plus pages.ts and nav.ts (the shared
+               nav) and public/ (favicon, share cards)
+tests/         42 files, 1360 tests
 e2e/           demo, wasm physics, particles, soft (WebGL); shared device and
                the GPU halves of particles and soft (WebGPU)
 .github/       ci.yml: four gates (verify / coverage / e2e / rust) then Pages deploy

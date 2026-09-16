@@ -134,6 +134,55 @@ html, body {
 }
 .seg:focus-visible { outline: 2px solid var(--teal); outline-offset: 1px; }
 
+/* --- demo nav --- */
+/* The five pages are one site, so each of them carries the same strip. Middle of
+   the top bar rather than a row of its own: every page already spends the bar's
+   right end on its headline control (tier, backend, task), and brand + nav +
+   control fit on one line from 1440px up -- measured, not guessed: the soft-body
+   page's four-button tier control leaves the nav 523px to live in, which the bar
+   only has to spare at that width, and a nav squeezed past it does not scroll,
+   it paints "Soft" under the control. Below 1440 the nav takes a full row
+   instead of showing half a label.
+
+   Deliberately not styled as a `.segmented`: two identical pill groups on one
+   bar, one of which navigates away and one of which does not, is a distinction
+   the eye should get for free. These are quiet text links; the current one is a
+   panel with a copper icon. */
+.topbar > .brand { order: 1; }
+.topbar > .pagenav { order: 2; }
+.topbar > .segmented { order: 3; }
+
+.pagenav {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+}
+.pagenav a {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--text-dim);
+  font-size: 12px;
+  text-decoration: none;
+  white-space: nowrap;
+  transition: background 120ms ease, color 120ms ease;
+}
+.pagenav-icon { display: inline-flex; }
+.pagenav a svg { width: 14px; height: 14px; }
+.pagenav a:hover { color: var(--text); background: var(--panel-2); }
+.pagenav a:focus-visible { outline: 2px solid var(--teal); outline-offset: 1px; }
+.pagenav a[aria-current='page'] {
+  background: var(--panel);
+  border-color: var(--line);
+  color: var(--text);
+}
+.pagenav a[aria-current='page'] svg { color: var(--copper); }
+
 /* --- stage --- */
 .stage {
   flex: 1 1 auto;
@@ -438,6 +487,21 @@ html, body {
 .report li.is-good { color: var(--teal); }
 .report li.is-warn { color: var(--rose); }
 
+/* --- below the width the bar can hold all three groups: nav takes its row --- */
+@media (max-width: 1439px) {
+  .topbar { flex-wrap: wrap; }
+  /* order 3 ties the page control, and DOM order breaks the tie, so the control
+     keeps the first row and the nav takes the second at full width. */
+  .topbar > .pagenav {
+    order: 3;
+    flex: 1 0 100%;
+    margin-top: 10px;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .topbar > .pagenav::-webkit-scrollbar { display: none; }
+}
+
 /* --- narrow screens: stack the sidebar under the viewport --- */
 @media (max-width: 880px) {
   .stage {
@@ -447,4 +511,13 @@ html, body {
   }
   .sidebar { overflow-y: visible; }
   .topbar { flex-wrap: wrap; padding: 10px 12px; }
+}
+
+/* --- phones: wrap the strip rather than hide half of it behind a scroll --- */
+@media (max-width: 560px) {
+  .topbar > .pagenav {
+    flex-wrap: wrap;
+    overflow-x: visible;
+    row-gap: 4px;
+  }
 }

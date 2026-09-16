@@ -156,3 +156,94 @@ test.describe('in-page training', () => {
     expect(errorsOf(page), 'no page or console errors').toEqual([]);
   });
 });
+
+/**
+ * The nav strip, asserted against the built site rather than the dev server.
+ *
+ * This is a browser spec and not a unit test because the property worth having
+ * only exists in a browser under the deployment's URL shape: the site is served
+ * from `https://<user>.github.io/<repo>/` on Pages and from the domain root
+ * locally, and an href that is domain-absolute works in exactly one of the two.
+ * `tests/demo_nav.test.ts` covers the pure half (the page list, the pathname
+ * logic, and that the list matches what vite builds); what is left is that five
+ * real pages really do render the strip, mark the right link, and navigate.
+ */
+test.describe('the five pages navigate to each other', () => {
+  /** Path relative to BASE, and the label its own nav link must carry. */
+  const PAGES = [
+    { path: '/', label: 'Trainer' },
+    { path: '/physics-check.html', label: 'Physics check' },
+    { path: '/shared-device.html', label: 'Shared device' },
+    { path: '/particles.html', label: 'Particles' },
+    { path: '/soft.html', label: 'Soft bodies' },
+  ] as const;
+
+  test('every page carries the strip, marks itself current, and links relatively', async ({
+    page,
+  }) => {
+    for (const p of PAGES) {
+      await page.goto(`${BASE}${p.path}`, { waitUntil: 'load' });
+      const where = `on ${p.path}`;
+
+      const nav = page.locator('.pagenav');
+      await expect(nav, `nav ${where}`).toBeVisible();
+      await expect(nav, `nav is labelled ${where}`).toHaveAttribute('aria-label', 'Demos');
+
+      const links = nav.locator('a');
+      await expect(links, `five links ${where}`).toHaveCount(PAGES.length);
+
+      const hrefs = await links.evaluateAll((els) =>
+        els.map((el) => el.getAttribute('href') ?? ''),
+      );
+      for (const href of hrefs) {
+        // A leading slash is the Pages bug class: it asks the domain root for a
+        // page that lives under a subpath. It would pass under `npm run dev`.
+        expect(href.startsWith('/'), `domain-absolute href "${href}" ${where}`).toBe(false);
+        expect(href.length, `empty href ${where}`).toBeGreaterThan(0);
+      }
+
+      const current = nav.locator('a[aria-current="page"]');
+      await expect(current, `exactly one current link ${where}`).toHaveCount(1);
+      await expect(current, `the current link ${where}`).toHaveText(p.label);
+
+      // "You are here" has to be true and not merely labelled: the link marked
+      // current must resolve to the URL the browser is actually on. Resolving
+      // against `page.url()` keeps this correct under any base.
+      const currentHref = await current.getAttribute('href');
+      expect(
+        new URL(currentHref ?? '', page.url()).href,
+        `current link resolves to this page ${where}`,
+      ).toBe(page.url());
+
+      // The five hrefs must resolve to five distinct URLs, exactly one of which
+      // is the page being looked at. Without this the strip could be five copies
+      // of one link, or four links plus a dead one, and both look fine by eye.
+      const resolved = hrefs.map((href) => new URL(href, page.url()).href);
+      expect(new Set(resolved).size, `five distinct targets ${where}`).toBe(PAGES.length);
+      expect(
+        resolved.filter((url) => url === page.url()).length,
+        `exactly one link resolves to this page ${where}`,
+      ).toBe(1);
+    }
+  });
+
+  test('a nav click lands on another page and that page renders', async ({ page }) => {
+    await page.goto(`${BASE}/`, { waitUntil: 'load' });
+    await expect(page.locator('#loading')).toBeHidden({ timeout: 30_000 });
+
+    await page.locator('.pagenav a', { hasText: 'Soft bodies' }).click();
+    await expect(page).toHaveURL(/soft\.html$/);
+    await expect(page.locator('.pagenav a[aria-current="page"]')).toHaveText('Soft bodies');
+
+    // Arriving is not the same as working. The other four pages are demos rather
+    // than documents, so the claim the nav makes -- "there is more here" -- is
+    // only honest if the page it lands on lifts its loading veil and draws.
+    await expect(page.locator('#loading')).toBeHidden({ timeout: 30_000 });
+    await expect(page.locator('#viewport canvas')).toBeVisible();
+
+    // And the strip survives the trip, so the nav is not one-directional.
+    await page.locator('.pagenav a', { hasText: 'Trainer' }).click();
+    await expect(page.locator('.pagenav a[aria-current="page"]')).toHaveText('Trainer');
+    await expect(page.locator('#viewport canvas')).toBeVisible();
+  });
+});

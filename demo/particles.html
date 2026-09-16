@@ -6,8 +6,25 @@
     <title>ThreeDream - GPU particle layer</title>
     <meta
       name="description"
-      content="ThreeDream M3: up to 100,000 particles simulated in WGSL compute on the same GPUDevice three.js renders with, drawn as one InstancedMesh draw call, with WebGL2 and CPU fallbacks."
+      content="ThreeDream GPU particles: up to 100,000 particles simulated in WGSL compute on the same GPUDevice three.js renders with, drawn as one InstancedMesh draw call, with WebGL2 and CPU fallbacks."
     />
+    <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="ThreeDream" />
+    <meta property="og:title" content="ThreeDream - GPU particle layer" />
+    <meta
+      property="og:description"
+      content="ThreeDream GPU particles: up to 100,000 particles simulated in WGSL compute on the same GPUDevice three.js renders with, drawn as one InstancedMesh draw call, with WebGL2 and CPU fallbacks."
+    />
+    <meta
+      property="og:url"
+      content="https://flowinginthewind700.github.io/threedream/particles.html"
+    />
+    <meta
+      property="og:image"
+      content="https://flowinginthewind700.github.io/threedream/og/particles.jpg"
+    />
+    <meta name="twitter:card" content="summary_large_image" />
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
@@ -140,6 +157,8 @@
         </aside>
       </main>
     </div>
+    <!-- The nav strip all five pages carry; the page list lives in demo/pages.ts. -->
+    <script type="module" src="./nav.ts"></script>
     <script type="module" src="./particles.ts"></script>
   </body>
 </html>

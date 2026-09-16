@@ -8,6 +8,23 @@
       name="description"
       content="ThreeDream determinism check: the reference physics scene run through the builtin TypeScript solver, the Rust/wasm kernel, and a wasm replay in the browser, compared bit for bit against the recorded digest."
     />
+    <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="ThreeDream" />
+    <meta property="og:title" content="ThreeDream - determinism check" />
+    <meta
+      property="og:description"
+      content="ThreeDream determinism check: the reference physics scene run through the builtin TypeScript solver, the Rust/wasm kernel, and a wasm replay in the browser, compared bit for bit against the recorded digest."
+    />
+    <meta
+      property="og:url"
+      content="https://flowinginthewind700.github.io/threedream/physics-check.html"
+    />
+    <meta
+      property="og:image"
+      content="https://flowinginthewind700.github.io/threedream/og/physics-check.jpg"
+    />
+    <meta name="twitter:card" content="summary_large_image" />
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
@@ -87,6 +104,8 @@
         </aside>
       </main>
     </div>
+    <!-- The nav strip all five pages carry; the page list lives in demo/pages.ts. -->
+    <script type="module" src="./nav.ts"></script>
     <script type="module" src="./physics-check.ts"></script>
   </body>
 </html>

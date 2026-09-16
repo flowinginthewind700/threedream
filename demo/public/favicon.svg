@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!--
+    The site's favicon: lucide's `orbit`, which is the shape of the project --
+    one body holding several things in a fixed relationship -- on the graphite
+    tile the demo chrome already uses, in the copper the UI reserves for "this
+    is the active one". Drawn by hand as paths rather than exported from an
+    editor so the file stays readable and diffable, and stroked rather than
+    filled so a 16px tab still reads as a ring and two dots instead of a smudge.
+  -->
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2b3138" />
+      <stop offset="1" stop-color="#1a1d22" />
+    </linearGradient>
+  </defs>
+  <rect x="1" y="1" width="62" height="62" rx="14" fill="url(#tile)" stroke="#3a4048" stroke-width="2" />
+  <g
+    transform="translate(8 8) scale(2)"
+    fill="none"
+    stroke="#dd8f3c"
+    stroke-width="2"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  >
+    <path d="M20.341 6.484A10 10 0 0 1 10.266 21.85" />
+    <path d="M3.659 17.516A10 10 0 0 1 13.74 2.152" />
+    <circle cx="12" cy="12" r="3" />
+    <circle cx="19" cy="5" r="2" />
+    <circle cx="5" cy="19" r="2" />
+  </g>
+</svg>
