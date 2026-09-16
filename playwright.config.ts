@@ -30,11 +30,13 @@ const SERVE = 'npm run build:pages && npx vite preview --base /threedream/ --por
  * `demo/`, `physics-check` and the fallback half of `particles` only need *a* GL
  * context, and headless Chromium has none, so they run on SwiftShader: that the
  * render layer works without hardware is the property worth testing.
- * `shared-device`, `particles_gpu` and `soft_gpu` need a real `GPUDevice`, which
- * SwiftShader-as-GL cannot provide -- they need ANGLE's Vulkan backend with the
- * WebGPU service enabled. Same browser, different flags, and a flag set that
- * works for one silently downgrades the other, so they are separate projects
- * rather than one `launchOptions` compromise.
+ * `particles_gpu` and `soft_gpu` need a real `GPUDevice`, which SwiftShader-as-GL
+ * cannot provide -- they need ANGLE's Vulkan backend with the WebGPU service
+ * enabled. `shared_device` needs that device for half of its assertions and the
+ * *absence* of one for the other half, so it runs under both projects. Same
+ * browser, different flags, and a flag set that works for one silently downgrades
+ * the other, so they are separate projects rather than one `launchOptions`
+ * compromise.
  */
 const SWIFTSHADER_ARGS = ['--use-gl=swiftshader', '--enable-unsafe-swiftshader', '--no-sandbox'];
 
@@ -56,7 +58,20 @@ const WEBGPU_ARGS = [
   `--use-angle=${process.env.E2E_ANGLE ?? 'vulkan'}`,
 ];
 
-/** Specs that need the WebGPU project, and must not run under SwiftShader. */
+/**
+ * Specs that need a real `GPUDevice` and must never run under SwiftShader: that
+ * project cannot produce one, so they would skip instead of testing anything.
+ */
+const WEBGPU_ONLY_SPECS = /(particles_gpu|soft_gpu)\.spec\.ts/;
+
+/**
+ * Specs the WebGPU project runs. `shared_device` is in both lists on purpose --
+ * it is the one file with something to assert on a machine *without* an adapter
+ * (that the page says "not checked" and still presents its fallback tier) and
+ * something else to assert on a machine with one (the three claims). Each half
+ * skips itself where its environment is missing, so running the file under both
+ * projects is what covers both outcomes rather than duplicated work.
+ */
 const WEBGPU_SPECS = /(shared_device|particles_gpu|soft_gpu)\.spec\.ts/;
 
 export default defineConfig({
@@ -74,7 +89,7 @@ export default defineConfig({
   projects: [
     {
       name: 'chromium',
-      testIgnore: WEBGPU_SPECS,
+      testIgnore: WEBGPU_ONLY_SPECS,
       use: { ...devices['Desktop Chrome'], launchOptions: { args: SWIFTSHADER_ARGS } },
     },
     {

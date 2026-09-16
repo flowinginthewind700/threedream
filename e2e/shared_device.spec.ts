@@ -10,14 +10,16 @@
  * `demo/shared-device.ts` is that proof as a page, and this spec is that page as
  * a test.
  *
- * Runs in the `chromium-webgpu` project only (see playwright.config.ts): it needs
- * ANGLE's Vulkan backend with the WebGPU service enabled, and the flag set that
- * provides it is not the one the SwiftShader projects use.
+ * Runs in both projects (see playwright.config.ts), because the two halves need
+ * opposite machines. The claim half needs ANGLE's Vulkan backend with the WebGPU
+ * service enabled; the fallback half needs a browser that grants no adapter at
+ * all, which is exactly what the SwiftShader project provides. Each half skips
+ * itself where its environment is missing, so a GPU-less runner still gets real
+ * assertions out of this file instead of a silently skipped one.
  *
  * Two describes, one per environment, because both outcomes are worth pinning:
- * with an adapter every claim must hold; without one the probe must say so and
- * pick a fallback tier. A GPU-less runner therefore still gets a real assertion
- * out of this file instead of a silently skipped one.
+ * with an adapter every claim must hold; without one the probe must say so, mark
+ * the claims as never run, and present the tier it fell back to.
  */
 
 import { expect, test, type Page } from '@playwright/test';
@@ -210,13 +212,14 @@ test.describe('one GPUDevice, shared by three.js and raw WGSL', () => {
 });
 
 test.describe('without a WebGPU adapter', () => {
-  test('the probe says so and the page picks a fallback tier', async ({ page }) => {
+  test('the probe says so, and the page presents the tier it landed on', async ({ page }) => {
+    const errors = watchErrors(page);
     const r = await openAndWait(page);
     test.skip(r.webgpuAvailable, 'this runner has WebGPU; the claims above are the real gate');
 
     // Not a free pass: `selectRenderTier` is production code, and this is the
     // only place it runs against a real browser rather than a stub.
-    expect(r.status, dump(r)).toBe('error');
+    expect(r.status, dump(r)).toBe('unavailable');
     expect(r.error, dump(r)).toMatch(/no usable WebGPU adapter/);
     expect(['webgl2', 'cpu'], `unexpected fallback tier:\n${dump(r)}`).toContain(r.tier);
     expect(r.tierReason, dump(r)).toMatch(/fallback/i);
@@ -226,17 +229,62 @@ test.describe('without a WebGPU adapter', () => {
       rawPipelineBound: false,
       interleaved: false,
     });
+    // The stronger half of the same statement. `claims` alone cannot tell "we
+    // checked and it failed" from "we never got to check", and a page that shows
+    // the second as the first tells readers their machine is broken.
+    expect(r.claimsRun, `nothing here was evaluated:\n${dump(r)}`).toEqual({
+      sameDeviceObject: false,
+      threeBufferReachable: false,
+      rawPipelineBound: false,
+      interleaved: false,
+    });
     expect(r.sentinelPoints, dump(r)).toBe(0);
 
     await expect(page.locator('#tier-badge')).toHaveText(r.tier);
-    await expect(page.locator('#verdict')).toHaveText(/Check failed/);
+    await expect(page.locator('#verdict')).toHaveText(/Not checked/);
     await expect(page.locator('#verdict')).toHaveClass(/is-warn/);
-    // The veil carries the reason, so a human sees why instead of a blank box.
-    await expect(page.locator('#loading')).toBeVisible();
-    await expect(page.locator('#loading')).toHaveText(/no usable WebGPU adapter/);
 
     const logged = await page.locator('#log li').allTextContents();
-    expect(logged.join('\n'), 'the log should explain the absence').toMatch(/webgpu: unavailable/);
+    const logText = logged.join('\n');
+    expect(logText, 'the log should explain the absence').toMatch(/webgpu: unavailable/);
+    expect(logText, 'the log should say the claims were not run').toMatch(/not checked/);
+
+    // Every row that could imply a result reads `not run`, and none of them wears
+    // the failure colour: a wall of FAIL is a claim about the reader's machine
+    // this page never earned the right to make.
+    const claimRows = [
+      'cl-device',
+      'cl-buffer',
+      'cl-pipeline',
+      'cl-interleaved',
+      'cl-sentinel',
+      'cl-pixels',
+    ];
+    for (const id of claimRows) {
+      const row = page.locator(`#${id}`);
+      await expect(row, `${id} should not claim a result`).toHaveText('not run');
+      await expect(row, `${id} is painted as a failure`).not.toHaveClass(/is-warn/);
+    }
+
+    // And the viewport is not a black hole. On the `cpu` tier there is no GL
+    // context to present with either, so that case stays the veil's job; here the
+    // tier exists and has to be visibly running.
+    if (r.tier === 'webgl2') {
+      await expect(page.locator('#loading')).toBeHidden();
+      const canvas = page.locator('#viewport canvas');
+      await expect(canvas).toBeVisible();
+      const unique = await distinctColors(page, await canvas.screenshot());
+      expect(unique, `the fallback viewport is one flat colour:\n${dump(r)}`).toBeGreaterThan(8);
+
+      const first = r.frames;
+      await page.waitForTimeout(500);
+      const later = await report(page);
+      expect(
+        later.frames,
+        `the fallback stopped presenting at frame ${first}:\n${dump(later)}`,
+      ).toBeGreaterThan(first);
+      expect(errors, `page or console errors on the fallback path:\n${dump(later)}`).toEqual([]);
+    }
   });
 
   test('the browser really has no adapter, rather than the page failing to ask', async ({ page }) => {

@@ -21,7 +21,9 @@
  * Capability probing goes through `src/gpu/capabilities.ts` rather than calling
  * `navigator.gpu` directly, because the plan requires the fallback to be a
  * runtime decision. When the probe says there is no usable adapter, this page
- * says so and stops -- it does not pretend to have checked anything.
+ * says so and stops checking -- the claim rows then read `not run` rather than
+ * `FAIL`, because nothing failed, and the viewport presents whatever fallback
+ * tier the probe landed on. It never pretends to have checked anything.
  */
 
 import * as THREE from 'three/webgpu';
@@ -120,7 +122,13 @@ interface WebGpuConstants {
 // ---------------------------------------------------------------------------
 
 export interface SharedDeviceReport {
-  status: 'running' | 'done' | 'error';
+  /**
+   * `unavailable` is its own status rather than a flavour of `error`: no adapter
+   * means the three claims were never evaluated, which is a different statement
+   * from having evaluated them and lost. Readers and the e2e suite tell them
+   * apart on this field.
+   */
+  status: 'running' | 'done' | 'error' | 'unavailable';
   error?: string;
   threeRevision: string;
   tier: string;
@@ -135,6 +143,17 @@ export interface SharedDeviceReport {
   /** Every limit below `LIMIT_FLOOR`, as reported by the shared probe. */
   unmetLimits: readonly string[];
   claims: {
+    sameDeviceObject: boolean;
+    threeBufferReachable: boolean;
+    rawPipelineBound: boolean;
+    interleaved: boolean;
+  };
+  /**
+   * Which claims were actually evaluated. A claim reads `false` both when it
+   * failed and when the page never got far enough to run it, so the report keeps
+   * the two apart here and the UI can say `not run` instead of painting rose.
+   */
+  claimsRun: {
     sameDeviceObject: boolean;
     threeBufferReachable: boolean;
     rawPipelineBound: boolean;
@@ -178,6 +197,12 @@ const report: SharedDeviceReport = {
   limits: { invocationsPerWorkgroup: 0, storageBufferBindingSize: 0, maxBufferSize: 0 },
   unmetLimits: [],
   claims: {
+    sameDeviceObject: false,
+    threeBufferReachable: false,
+    rawPipelineBound: false,
+    interleaved: false,
+  },
+  claimsRun: {
     sameDeviceObject: false,
     threeBufferReachable: false,
     rawPipelineBound: false,
@@ -251,6 +276,14 @@ function showClaim(id: string, ok: boolean | null, text?: string): void {
   el.classList.toggle('is-warn', ok === false);
 }
 
+/** The label for a claim the page never got far enough to evaluate. */
+const NOT_RUN = 'not run';
+
+/** A claim that was not evaluated reads `not run` and stays neutral, not rose. */
+function showRanClaim(id: string, ran: boolean, ok: boolean): void {
+  showClaim(id, ran ? ok : null, ran ? undefined : NOT_RUN);
+}
+
 function showStat(id: string, text: string, good = false): void {
   const el = byId(id);
   el.textContent = text;
@@ -259,16 +292,25 @@ function showStat(id: string, text: string, good = false): void {
 
 function paintReport(): void {
   const c = report.claims;
-  showClaim('cl-device', c.sameDeviceObject);
-  showClaim('cl-buffer', c.threeBufferReachable);
-  showClaim('cl-pipeline', c.rawPipelineBound);
-  showClaim('cl-interleaved', c.interleaved);
+  const ran = report.claimsRun;
+  showRanClaim('cl-device', ran.sameDeviceObject, c.sameDeviceObject);
+  showRanClaim('cl-buffer', ran.threeBufferReachable, c.threeBufferReachable);
+  showRanClaim('cl-pipeline', ran.rawPipelineBound, c.rawPipelineBound);
+  showRanClaim('cl-interleaved', ran.interleaved, c.interleaved);
+  // The sentinel count and the canvas bytes are both consequences of the
+  // interleaved frames, so they stay neutral until those frames really ran.
+  const sentinelOk =
+    report.sentinelPoints === POINTS ? true : report.sentinelPoints > 0 ? false : null;
   showClaim(
     'cl-sentinel',
-    report.sentinelPoints === POINTS ? true : report.sentinelPoints > 0 ? false : null,
-    `${report.sentinelPoints} / ${POINTS}`,
+    ran.interleaved ? sentinelOk : null,
+    ran.interleaved ? `${report.sentinelPoints} / ${POINTS}` : NOT_RUN,
   );
-  showClaim('cl-pixels', report.canvasBytes > 0 ? true : null, `${report.canvasBytes} B`);
+  showClaim(
+    'cl-pixels',
+    ran.interleaved ? (report.canvasBytes > 0 ? true : null) : null,
+    ran.interleaved ? `${report.canvasBytes} B` : NOT_RUN,
+  );
   showStat('ad-tier', report.tier, report.tier === 'webgpu');
   showStat('ad-level', report.featureLevel ?? '\u2014');
   const l = report.limits;
@@ -347,7 +389,11 @@ function stopIdle(): void {
  */
 interface ActiveRun {
   renderer: THREE.WebGPURenderer;
-  device: DeviceLike;
+  /**
+   * Absent on the fallback tier, where three.js owns the context and there is no
+   * `GPUDevice` of ours left to destroy.
+   */
+  device?: DeviceLike;
   canvas: HTMLCanvasElement;
 }
 
@@ -356,7 +402,7 @@ let active: ActiveRun | null = null;
 function teardown(): void {
   stopIdle();
   active?.renderer.dispose();
-  active?.device.destroy();
+  active?.device?.destroy();
   active?.canvas.remove();
   active = null;
 }
@@ -367,6 +413,7 @@ function startIdle(
   scene: THREE.Scene,
   camera: THREE.Camera,
   box: THREE.Mesh,
+  countFrames = false,
 ): void {
   let frame = 0;
   const loop = (): void => {
@@ -374,8 +421,63 @@ function startIdle(
     frame += 1;
     box.rotation.y = frame * 0.008;
     renderer.render(scene, camera);
+    if (countFrames) {
+      // The fallback path never ran the measured 20 frames, so the badge counts
+      // the frames it is presenting instead of sitting on a stale zero.
+      report.frames = frame;
+      frameBadge.textContent = `${frame} frames`;
+    }
   };
   idleFrame = requestAnimationFrame(loop);
+}
+
+/** A canvas stretched to the viewport by CSS, which is what both paths want. */
+function makeCanvas(): HTMLCanvasElement {
+  const canvas = document.createElement('canvas');
+  canvas.style.width = '100%';
+  canvas.style.height = '100%';
+  canvas.style.display = 'block';
+  viewport.appendChild(canvas);
+  return canvas;
+}
+
+/** The box the check presents, so the fallback frame shows the same subject. */
+function boxScene(width: number, height: number): {
+  scene: THREE.Scene;
+  camera: THREE.PerspectiveCamera;
+  box: THREE.Mesh;
+} {
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x0e1013);
+  const box = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshNormalMaterial());
+  scene.add(box);
+  const camera = new THREE.PerspectiveCamera(55, width / height, 0.1, 100);
+  camera.position.set(0, 0, 3.2);
+  return { scene, camera, box };
+}
+
+/**
+ * Present the tier the probe landed on instead of leaving an empty black box.
+ *
+ * The `forceWebGL` renderer is the house fallback pattern (`demo/particles.ts`,
+ * `demo/soft.ts` both reach for it on the tiers with no device). None of this is
+ * evidence for the three claims, and the page says so -- but a viewport that
+ * renders is the honest picture of "this browser granted no WebGPU adapter; here
+ * is what it does have".
+ */
+async function presentFallback(): Promise<void> {
+  const canvas = makeCanvas();
+  // Without `forceWebGL` three.js would request an adapter of its own here, which
+  // is the exact request the probe just answered "no" to.
+  const renderer = new THREE.WebGPURenderer({ canvas, antialias: false, forceWebGL: true });
+  const width = Math.max(1, viewport.clientWidth);
+  const height = Math.max(1, viewport.clientHeight);
+  renderer.setSize(width, height, false);
+  await renderer.init();
+  active = { renderer, canvas };
+  loading.classList.add('is-hidden');
+  const { scene, camera, box } = boxScene(width, height);
+  startIdle(renderer, scene, camera, box, true);
 }
 
 async function run(): Promise<void> {
@@ -389,6 +491,12 @@ async function run(): Promise<void> {
   report.msPerFrame = 0;
   report.frames = 0;
   report.claims = {
+    sameDeviceObject: false,
+    threeBufferReachable: false,
+    rawPipelineBound: false,
+    interleaved: false,
+  };
+  report.claimsRun = {
     sameDeviceObject: false,
     threeBufferReachable: false,
     rawPipelineBound: false,
@@ -423,7 +531,23 @@ async function run(): Promise<void> {
     paintReport();
 
     if (!webgpu.available) {
-      throw new Error(`no usable WebGPU adapter (${decision.reason}); nothing to check`);
+      // No adapter means none of the three claims can be evaluated, which is
+      // not the same as having evaluated them and lost. Say that plainly, leave
+      // the claim rows neutral, and still show the reader the tier their
+      // browser landed on rather than an empty black viewport.
+      report.status = 'unavailable';
+      report.error = `no usable WebGPU adapter (${decision.reason})`;
+      log(`not checked: ${decision.reason}`, 'warn');
+      log(`presenting the ${decision.tier} fallback tier`);
+      verdict.textContent =
+        `Not checked -- ${decision.reason}. The three claims need one GPUDevice shared ` +
+        `with three.js, so none of them ran; the viewport presents the ${decision.tier} ` +
+        `fallback tier instead.`;
+      verdict.classList.add('is-warn');
+      tierBadge.textContent = decision.tier;
+      paintReport();
+      await presentFallback();
+      return;
     }
     tierBadge.textContent = `${decision.tier} / ${webgpu.featureLevel ?? '?'}`;
 
@@ -450,11 +574,7 @@ async function run(): Promise<void> {
         `maxStorageBinding=${mib(device.limits['maxStorageBufferBindingSize'] ?? 0)}`,
     );
 
-    const canvas = document.createElement('canvas');
-    canvas.style.width = '100%';
-    canvas.style.height = '100%';
-    canvas.style.display = 'block';
-    viewport.appendChild(canvas);
+    const canvas = makeCanvas();
     renderer = new THREE.WebGPURenderer({ canvas, antialias: false, device });
     // Sized to the viewport rather than a fixed 640x360: `updateStyle` is false
     // because the canvas is stretched by CSS, and a drawing buffer whose aspect
@@ -469,6 +589,7 @@ async function run(): Promise<void> {
     const backend = renderer.backend as unknown as RendererInternals;
     report.backendIsWebGpu = backend.isWebGPUBackend === true;
     report.claims.sameDeviceObject = backend.device === device;
+    report.claimsRun.sameDeviceObject = true;
     log(`backend is WebGPU: ${String(report.backendIsWebGpu)}`);
     log(`CLAIM1 same device object: ${String(report.claims.sameDeviceObject)}`,
       report.claims.sameDeviceObject ? 'good' : 'warn');
@@ -494,6 +615,7 @@ async function run(): Promise<void> {
     const threeBuffer = backend.get(attr).buffer;
     report.claims.threeBufferReachable =
       !!threeBuffer && typeof threeBuffer.mapAsync === 'function';
+    report.claimsRun.threeBufferReachable = true;
     log(
       `CLAIM2 three-managed GPUBuffer reachable: ${String(report.claims.threeBufferReachable)}`,
       report.claims.threeBufferReachable ? 'good' : 'warn',
@@ -535,17 +657,10 @@ async function run(): Promise<void> {
       compute: { module, entryPoint: 'main' },
     });
     report.claims.rawPipelineBound = true;
+    report.claimsRun.rawPipelineBound = true;
     log("CLAIM3 raw pipeline bound to THREE's buffer: OK", 'good');
 
-    const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x0e1013);
-    const box = new THREE.Mesh(
-      new THREE.BoxGeometry(1, 1, 1),
-      new THREE.MeshNormalMaterial(),
-    );
-    scene.add(box);
-    const camera = new THREE.PerspectiveCamera(55, width / height, 0.1, 100);
-    camera.position.set(0, 0, 3.2);
+    const { scene, camera, box } = boxScene(width, height);
 
     // One interleaved pair per animation frame rather than a tight loop: the
     // frames actually present, so what is on screen is what was measured.
@@ -570,6 +685,7 @@ async function run(): Promise<void> {
     await device.queue.onSubmittedWorkDone();
     report.msPerFrame = elapsed / FRAMES;
     report.claims.interleaved = true;
+    report.claimsRun.interleaved = true;
     log(
       `CLAIM3 ${FRAMES}x raw-compute + three.render interleaved: OK ` +
         `(${report.msPerFrame.toFixed(2)} ms/frame, compute+render+present)`,

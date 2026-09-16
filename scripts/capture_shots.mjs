@@ -113,7 +113,10 @@ async function settled(page, globalName, want = 'live') {
   await page.waitForFunction(
     ([name, wanted]) => {
       const r = window[name];
-      return !!r && (r.status === wanted || r.status === 'error');
+      // `unavailable` is the shared-device page's "no adapter, claims not run"
+      // status. It is terminal too, so a capture host without WebGPU fails the
+      // gate with the reason attached instead of hanging for ten minutes.
+      return !!r && (r.status === wanted || r.status === 'error' || r.status === 'unavailable');
     },
     [globalName, want],
     // The GPU pages compile their pipelines through ANGLE before the first frame,

@@ -23,6 +23,7 @@ draw call、没有回读。iGPU 上，每步取 20 个计时 chunk 的中位数�
 ms/步，1 万节点布料 2.3–3.2 ms/步，2 万节点 3.9–6.3 ms/步。
 
 [![CI](https://github.com/flowinginthewind700/threedream/actions/workflows/ci.yml/badge.svg)](https://github.com/flowinginthewind700/threedream/actions/workflows/ci.yml)
+[![Live demos](https://img.shields.io/badge/live_demos-GitHub_Pages-f08c1a)](https://flowinginthewind700.github.io/threedream/)
 
 ![the demo, mid-training](docs/demo-drive.jpg)
 
@@ -36,7 +37,7 @@ the sidebars are read off the running engine.
 |---|---|---|
 | Trainer | [threedream/](https://flowinginthewind700.github.io/threedream/) | A policy-gradient learner training in the page, on `DriveEnv` and `ReachEnv`. |
 | Physics check | [physics-check.html](https://flowinginthewind700.github.io/threedream/physics-check.html) | One canonical scene through `builtin`, `wasm` and a wasm replay, digests compared in your own browser. |
-| Shared device | [shared-device.html](https://flowinginthewind700.github.io/threedream/shared-device.html) | A single `GPUDevice` backing three.js rendering and a raw WGSL compute pipeline at the same time. |
+| Shared device | [shared-device.html](https://flowinginthewind700.github.io/threedream/shared-device.html) | A single `GPUDevice` backing three.js rendering and a raw WGSL compute pipeline at the same time. Where the browser grants no adapter at all, the page says `not checked`, leaves every claim row at `not run`, and presents the tier it fell back to. |
 | Particles | [particles.html](https://flowinginthewind700.github.io/threedream/particles.html) | 1k-100k particles: which tier the browser gave you, blit or CPU upload, draw calls, hash overflow. |
 | Soft bodies | [soft.html](https://flowinginthewind700.github.io/threedream/soft.html) | Cloth / sheets / cube / rope up to 20k nodes: islands, color batches, dispatches a step, the race-free flag, max stretch. |
 
@@ -72,7 +73,7 @@ Locally, `npm run dev` serves the same five at `http://localhost:5173/` and
 |---|---|---|
 | 训练页 | [threedream/](https://flowinginthewind700.github.io/threedream/) | 在页面里实时训练的策略梯度学习器，任务是 `DriveEnv` 与 `ReachEnv`。 |
 | 确定性检查 | [physics-check.html](https://flowinginthewind700.github.io/threedream/physics-check.html) | 同一个规范场景跑 `builtin`、`wasm` 与一次 wasm 回放，在你自己的浏览器里比对摘要。 |
-| 共享设备 | [shared-device.html](https://flowinginthewind700.github.io/threedream/shared-device.html) | 同一个 `GPUDevice` 同时支撑 three.js 渲染与一条裸 WGSL compute pipeline。 |
+| 共享设备 | [shared-device.html](https://flowinginthewind700.github.io/threedream/shared-device.html) | 同一个 `GPUDevice` 同时支撑 three.js 渲染与一条裸 WGSL compute pipeline。浏览器完全不给 adapter 时，页面会说「未检查」，把每条 claim 留在 `not run`，并呈现它实际落到的那一档。 |
 | 粒子 | [particles.html](https://flowinginthewind700.github.io/threedream/particles.html) | 1k–100k 粒子：浏览器实际给了哪个档位、走 blit 还是 CPU 上传、draw call 数、哈希溢出数。 |
 | 软体 | [soft.html](https://flowinginthewind700.github.io/threedream/soft.html) | 布料 / 多片布 / 立方体 / 绳，最多 2 万节点：island 数、着色批次数、每步 dispatch 数、无竞争标志、最大拉伸。 |
 
@@ -480,7 +481,7 @@ and `tests/tdd.test.ts` fails the build the moment a new module lands without on
 |---|---|---|
 | `npm test` | 1360 unit tests, headless, no GPU needed | ~21s |
 | `npm run test:coverage` | same suite under v8, floor enforced by `vitest.config.ts` | ~21s |
-| `npm run test:e2e` | 50 Playwright tests over 7 specs, two projects: SwiftShader WebGL2 and ANGLE/Vulkan WebGPU | ~50s |
+| `npm run test:e2e` | 56 Playwright tests over 7 specs, two projects: SwiftShader WebGL2 and ANGLE/Vulkan WebGPU | ~50s |
 | `npm run test:rust` | 68 native Rust tests for the solver | ~1s warm |
 | `npm run check:wasm` | 35 assertions over the committed `wasm/pkg`: ABI, provenance, behaviour | ~1s |
 | `node scripts/bench_gpu_particles.mjs` | the M3 ladder at 1k/10k/50k/100k particles, 160 steps a rung: per-step cost as p50/p95/mean over 20 chunk samples, draw calls, blit size | ~6s |
@@ -491,11 +492,14 @@ and `tests/tdd.test.ts` fails the build the moment a new module lands without on
 The two e2e projects exist because the pages need two different GPUs. `demo`,
 `physics-check`, `particles` and `soft` only need *a* GL context, and headless
 Chromium has none, so they run on SwiftShader: that the render layer works
-without hardware is the property worth testing. `shared-device` and the GPU
-halves of `particles` and `soft` need a real `GPUDevice`, which means ANGLE's
-Vulkan backend with the WebGPU service enabled. Same browser, different flags,
-and a flag set that works for one silently downgrades the other. The six tests
-that assume *no* adapter skip themselves on a machine that has one, rather than
+without hardware is the property worth testing. The GPU halves of `particles`
+and `soft` need a real `GPUDevice`, which means ANGLE's Vulkan backend with the
+WebGPU service enabled. Same browser, different flags, and a flag set that works
+for one silently downgrades the other. `shared-device` runs under both: with an
+adapter it gates the three claims, without one it pins what the page owes a
+reader whose browser has no WebGPU at all -- the claims left at `not run` rather
+than painted as failures, and the fallback tier still presenting. The tests that
+assume *no* adapter skip themselves on a machine that has one, rather than
 reporting a tier the machine did not produce.
 
 Coverage is a separate command, not a flag on `npm test`: instrumenting the
